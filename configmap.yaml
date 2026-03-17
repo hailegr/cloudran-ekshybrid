@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: example-kro-config
+  namespace: kro-system
+data:
+  example: "This is a KRO site deployment"
