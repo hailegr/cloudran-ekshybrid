@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: example-ack-config
+  namespace: ack-system
+data:
+  example: "This is an ACK site deployment"
