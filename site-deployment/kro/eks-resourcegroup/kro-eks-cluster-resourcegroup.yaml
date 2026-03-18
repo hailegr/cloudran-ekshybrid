@@ -152,6 +152,7 @@ spec:
         metadata:
           name: ${schema.spec.clusterName}-sg
         spec:
+          name: ${schema.spec.clusterName}-sg
           description: "EKS cluster security group"
           vpcID: ${vpc.status.vpcID}
     
