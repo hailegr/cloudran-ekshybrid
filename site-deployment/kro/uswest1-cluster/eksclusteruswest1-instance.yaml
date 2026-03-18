@@ -1,0 +1,11 @@
+apiVersion: kro.run/v1alpha1
+kind: EKSClusterWithVPC
+metadata:
+  name: eksclusteruswest1
+  namespace: kro-system
+spec:
+  clusterName: eksclusteruswest1
+  region: us-west-1
+  vpcCIDR: "12.10.0.0/16"
+  kubernetesVersion: "1.31"
+  clusterRoleARN: "arn:aws:iam::242201304709:role/eksClusterRole"
