@@ -1,10 +1,10 @@
 apiVersion: kro.run/v1alpha1
-kind: ResourceGroup
+kind: ResourceGraphDefinition
 metadata:
   name: eks-cluster-with-vpc
   namespace: kro-system
 spec:
-  # Schema defines the input parameters for this ResourceGroup
+  # Schema defines the input parameters for this ResourceGraphDefinition
   schema:
     apiVersion: v1alpha1
     kind: EKSClusterWithVPC
