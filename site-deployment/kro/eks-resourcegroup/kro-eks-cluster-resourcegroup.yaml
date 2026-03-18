@@ -4,7 +4,6 @@ metadata:
   name: eks-cluster-with-vpc
   namespace: kro-system
 spec:
-  # Schema defines the input parameters for this ResourceGraphDefinition
   schema:
     apiVersion: v1alpha1
     kind: EKSClusterWithVPC
@@ -12,13 +11,14 @@ spec:
       clusterName: string
       region: string
       vpcCIDR: string
-      kubernetesVersion: string | default="1.31"
+      kubernetesVersion: string
       clusterRoleARN: string
   
-  # Resources defines all the AWS resources to create
   resources:
     # 1. VPC
     - id: vpc
+      readyWhen:
+        - ${vpc.status.state == "available"}
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: VPC
@@ -29,11 +29,6 @@ spec:
             - ${schema.spec.vpcCIDR}
           enableDNSSupport: true
           enableDNSHostnames: true
-          tags:
-            - key: Name
-              value: ${schema.spec.clusterName}-vpc
-            - key: ManagedBy
-              value: kro
     
     # 2. Internet Gateway
     - id: igw
@@ -43,15 +38,12 @@ spec:
         metadata:
           name: ${schema.spec.clusterName}-igw
         spec:
-          vpcRef:
-            from:
-              name: ${vpc.metadata.name}
-          tags:
-            - key: Name
-              value: ${schema.spec.clusterName}-igw
+          vpc: ${vpc.status.vpcID}
     
     # 3. Public Subnet 1 (AZ a)
     - id: publicSubnet1
+      readyWhen:
+        - ${publicSubnet1.status.state == "available"}
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: Subnet
@@ -61,17 +53,12 @@ spec:
           availabilityZone: ${schema.spec.region}a
           cidrBlock: "12.10.0.0/24"
           mapPublicIPOnLaunch: true
-          vpcRef:
-            from:
-              name: ${vpc.metadata.name}
-          tags:
-            - key: Name
-              value: ${schema.spec.clusterName}-public-1a
-            - key: kubernetes.io/role/elb
-              value: "1"
+          vpcID: ${vpc.status.vpcID}
     
     # 4. Public Subnet 2 (AZ b)
     - id: publicSubnet2
+      readyWhen:
+        - ${publicSubnet2.status.state == "available"}
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: Subnet
@@ -81,17 +68,12 @@ spec:
           availabilityZone: ${schema.spec.region}b
           cidrBlock: "12.10.1.0/24"
           mapPublicIPOnLaunch: true
-          vpcRef:
-            from:
-              name: ${vpc.metadata.name}
-          tags:
-            - key: Name
-              value: ${schema.spec.clusterName}-public-1b
-            - key: kubernetes.io/role/elb
-              value: "1"
+          vpcID: ${vpc.status.vpcID}
     
     # 5. Private Subnet 1 (AZ a)
     - id: privateSubnet1
+      readyWhen:
+        - ${privateSubnet1.status.state == "available"}
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: Subnet
@@ -100,17 +82,12 @@ spec:
         spec:
           availabilityZone: ${schema.spec.region}a
           cidrBlock: "12.10.10.0/24"
-          vpcRef:
-            from:
-              name: ${vpc.metadata.name}
-          tags:
-            - key: Name
-              value: ${schema.spec.clusterName}-private-1a
-            - key: kubernetes.io/role/internal-elb
-              value: "1"
+          vpcID: ${vpc.status.vpcID}
     
     # 6. Private Subnet 2 (AZ b)
     - id: privateSubnet2
+      readyWhen:
+        - ${privateSubnet2.status.state == "available"}
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: Subnet
@@ -119,14 +96,7 @@ spec:
         spec:
           availabilityZone: ${schema.spec.region}b
           cidrBlock: "12.10.11.0/24"
-          vpcRef:
-            from:
-              name: ${vpc.metadata.name}
-          tags:
-            - key: Name
-              value: ${schema.spec.clusterName}-private-1b
-            - key: kubernetes.io/role/internal-elb
-              value: "1"
+          vpcID: ${vpc.status.vpcID}
     
     # 7. Elastic IP for NAT Gateway
     - id: natEIP
@@ -135,10 +105,7 @@ spec:
         kind: ElasticIPAddress
         metadata:
           name: ${schema.spec.clusterName}-nat-eip
-        spec:
-          tags:
-            - key: Name
-              value: ${schema.spec.clusterName}-nat-eip
+        spec: {}
     
     # 8. NAT Gateway
     - id: natGateway
@@ -148,15 +115,8 @@ spec:
         metadata:
           name: ${schema.spec.clusterName}-nat
         spec:
-          allocationRef:
-            from:
-              name: ${natEIP.metadata.name}
-          subnetRef:
-            from:
-              name: ${publicSubnet1.metadata.name}
-          tags:
-            - key: Name
-              value: ${schema.spec.clusterName}-nat
+          allocationID: ${natEIP.status.allocationID}
+          subnetID: ${publicSubnet1.status.subnetID}
     
     # 9. Public Route Table
     - id: publicRouteTable
@@ -166,17 +126,10 @@ spec:
         metadata:
           name: ${schema.spec.clusterName}-public-rt
         spec:
-          vpcRef:
-            from:
-              name: ${vpc.metadata.name}
+          vpcID: ${vpc.status.vpcID}
           routes:
             - destinationCIDRBlock: "0.0.0.0/0"
-              gatewayRef:
-                from:
-                  name: ${igw.metadata.name}
-          tags:
-            - key: Name
-              value: ${schema.spec.clusterName}-public-rt
+              gatewayID: ${igw.status.internetGatewayID}
     
     # 10. Private Route Table
     - id: privateRouteTable
@@ -186,17 +139,10 @@ spec:
         metadata:
           name: ${schema.spec.clusterName}-private-rt
         spec:
-          vpcRef:
-            from:
-              name: ${vpc.metadata.name}
+          vpcID: ${vpc.status.vpcID}
           routes:
             - destinationCIDRBlock: "0.0.0.0/0"
-              natGatewayRef:
-                from:
-                  name: ${natGateway.metadata.name}
-          tags:
-            - key: Name
-              value: ${schema.spec.clusterName}-private-rt
+              natGatewayID: ${natGateway.status.natGatewayID}
     
     # 11. Cluster Security Group
     - id: clusterSG
@@ -207,15 +153,12 @@ spec:
           name: ${schema.spec.clusterName}-sg
         spec:
           description: "EKS cluster security group"
-          vpcRef:
-            from:
-              name: ${vpc.metadata.name}
-          tags:
-            - key: Name
-              value: ${schema.spec.clusterName}-sg
+          vpcID: ${vpc.status.vpcID}
     
     # 12. EKS Cluster
     - id: eksCluster
+      readyWhen:
+        - ${eksCluster.status.status == "ACTIVE"}
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
         kind: Cluster
@@ -226,17 +169,12 @@ spec:
           version: ${schema.spec.kubernetesVersion}
           roleARN: ${schema.spec.clusterRoleARN}
           resourcesVPCConfig:
-            subnetRefs:
-              - from:
-                  name: ${publicSubnet1.metadata.name}
-              - from:
-                  name: ${publicSubnet2.metadata.name}
-              - from:
-                  name: ${privateSubnet1.metadata.name}
-              - from:
-                  name: ${privateSubnet2.metadata.name}
-            securityGroupRefs:
-              - from:
-                  name: ${clusterSG.metadata.name}
+            subnetIDs:
+              - ${publicSubnet1.status.subnetID}
+              - ${publicSubnet2.status.subnetID}
+              - ${privateSubnet1.status.subnetID}
+              - ${privateSubnet2.status.subnetID}
+            securityGroupIDs:
+              - ${clusterSG.status.id}
             endpointPublicAccess: true
             endpointPrivateAccess: true
