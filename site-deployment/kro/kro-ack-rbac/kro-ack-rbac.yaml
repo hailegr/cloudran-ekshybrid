@@ -1,0 +1,75 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kro-ack-access
+rules:
+  # Allow KRO to manage ACK EC2 resources
+  - apiGroups:
+      - ec2.services.k8s.aws
+    resources:
+      - vpcs
+      - subnets
+      - internetgateways
+      - natgateways
+      - routetables
+      - securitygroups
+      - elasticipaddresses
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Allow KRO to manage ACK EKS resources
+  - apiGroups:
+      - eks.services.k8s.aws
+    resources:
+      - clusters
+      - nodegroups
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Allow KRO to read status of ACK resources
+  - apiGroups:
+      - ec2.services.k8s.aws
+    resources:
+      - vpcs/status
+      - subnets/status
+      - internetgateways/status
+      - natgateways/status
+      - routetables/status
+      - securitygroups/status
+      - elasticipaddresses/status
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - eks.services.k8s.aws
+    resources:
+      - clusters/status
+      - nodegroups/status
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kro-capability-ack-access
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kro-ack-access
+subjects:
+  - kind: User
+    name: capabilities.eks.amazonaws.com
+    apiGroup: rbac.authorization.k8s.io
