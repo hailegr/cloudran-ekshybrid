@@ -1,3 +1,4 @@
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -72,4 +73,16 @@ roleRef:
 subjects:
   - kind: User
     name: capabilities.eks.amazonaws.com
+    apiGroup: rbac.authorization.k8s.io
+  - kind: User
+    name: eks:cluster-capability
+    apiGroup: rbac.authorization.k8s.io
+  - kind: ServiceAccount
+    name: default
+    namespace: kro-system
+  - kind: Group
+    name: system:authenticated
+    apiGroup: rbac.authorization.k8s.io
+  - kind: Group
+    name: eks:cluster-capability
     apiGroup: rbac.authorization.k8s.io
