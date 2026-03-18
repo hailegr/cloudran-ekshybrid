@@ -9,30 +9,11 @@ spec:
     apiVersion: v1alpha1
     kind: EKSClusterWithVPC
     spec:
-      type: object
-      properties:
-        clusterName:
-          type: string
-          description: "Name of the EKS cluster"
-        region:
-          type: string
-          description: "AWS region for the cluster"
-        vpcCIDR:
-          type: string
-          description: "CIDR block for the VPC"
-        kubernetesVersion:
-          type: string
-          description: "Kubernetes version"
-          default: "1.31"
-        clusterRoleARN:
-          type: string
-          description: "IAM role ARN for EKS cluster"
-      required:
-        - clusterName
-        - region
-        - vpcCIDR
-        - clusterRoleARN
-  
+      clusterName: string
+      region: string
+      vpcCIDR: string
+      kubernetesVersion: string | default="1.31"
+      clusterRoleARN: string
   # Resources defines all the AWS resources to create
   resources:
     # 1. VPC
