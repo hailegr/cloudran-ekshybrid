@@ -251,8 +251,3 @@ spec:
                   name: ${clusterSG.metadata.name}
             endpointPublicAccess: true
             endpointPrivateAccess: true
-          tags:
-            - key: Name
-              value: ${schema.spec.clusterName}
-            - key: ManagedBy
-              value: kro
