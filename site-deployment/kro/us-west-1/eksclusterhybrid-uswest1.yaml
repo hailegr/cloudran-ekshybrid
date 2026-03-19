@@ -11,3 +11,6 @@ spec:
   clusterRoleARN: "arn:aws:iam::242201304709:role/eksClusterRole"
   endpointPublicAccess: true
   endpointPrivateAccess: true
+  # Hybrid node configuration (optional, defaults provided)
+  remoteNodeCIDR: "192.16.10.0/24"
+  remotePodCIDR: "192.16.11.0/24"
