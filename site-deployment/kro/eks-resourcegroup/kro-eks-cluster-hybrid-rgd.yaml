@@ -17,8 +17,8 @@ spec:
       endpointPublicAccess: boolean | default=true
       endpointPrivateAccess: boolean | default=true
       # Hybrid nodes configuration
-      remoteNodeCIDRs: "[]string"
-      remotePodCIDRs: "[]string"
+      remoteNodeCIDRs: string[]
+      remotePodCIDRs: string[]
   
   resources:
     # 1. VPC
