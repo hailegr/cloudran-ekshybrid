@@ -16,9 +16,6 @@ spec:
       # API access configuration
       endpointPublicAccess: boolean | default=true
       endpointPrivateAccess: boolean | default=true
-      # Hybrid nodes configuration
-      remoteNodeCIDRs: string[]
-      remotePodCIDRs: string[]
   
   resources:
     # 1. VPC
@@ -214,7 +211,9 @@ spec:
             endpointPublicAccess: ${schema.spec.endpointPublicAccess}
             endpointPrivateAccess: ${schema.spec.endpointPrivateAccess}
           remoteNetworkConfig:
-            remoteNodeNetworks: ${schema.spec.remoteNodeCIDRs.map(cidr, {"cidrs": [cidr]})}
-            remotePodNetworks: ${schema.spec.remotePodCIDRs.map(cidr, {"cidrs": [cidr]})}
+            remoteNodeNetworks:
+              - cidrs:
+                  - "172.16.10.0/24"
             remotePodNetworks:
-              - cidrs: ${schema.spec.remotePodCIDRs}
+              - cidrs:
+                  - "172.16.11.0/24"
