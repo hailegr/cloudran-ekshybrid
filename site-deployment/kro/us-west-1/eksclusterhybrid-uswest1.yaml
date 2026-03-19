@@ -1,0 +1,16 @@
+apiVersion: kro.run/v1alpha1
+kind: EKSClusterHybrid
+metadata:
+  name: eksclusterhybrid-uswest1
+  namespace: kro-system
+spec:
+  clusterName: eksclusterhybrid-uswest1
+  region: us-west-1
+  vpcCIDR: "12.10.0.0/16"
+  kubernetesVersion: "1.31"
+  clusterRoleARN: "arn:aws:iam::242201304709:role/eksClusterRole"
+  endpointPublicAccess: true
+  endpointPrivateAccess: true
+  # Hybrid node configuration (optional, defaults provided)
+  remoteNodeCIDR: "192.168.10.0/24"
+  remotePodCIDR: "192.168.11.0/24"
