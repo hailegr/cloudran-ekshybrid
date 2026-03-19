@@ -14,8 +14,8 @@ spec:
       kubernetesVersion: string
       clusterRoleARN: string
       # Hybrid nodes configuration (optional)
-      remoteNodeCIDRs: string[] | default=[]
-      remotePodCIDRs: string[] | default=[]
+      remoteNodeCIDRs: "string[] | default=[]"
+      remotePodCIDRs: "string[] | default=[]"
       # API access configuration
       endpointPublicAccess: boolean | default=true
       endpointPrivateAccess: boolean | default=true
