@@ -1,0 +1,24 @@
+apiVersion: iam.services.k8s.aws/v1alpha1
+kind: Role
+metadata:
+  name: eksclusterrole
+  namespace: ack-system
+spec:
+  name: eksClusterRole
+  description: "IAM role for EKS clusters created via ACK/KRO"
+  assumeRolePolicyDocument: |
+    {
+      "Version": "2012-10-17",
+      "Statement": [{
+        "Effect": "Allow",
+        "Principal": {"Service": "eks.amazonaws.com"},
+        "Action": "sts:AssumeRole"
+      }]
+    }
+  policies:
+    - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+  tags:
+    - key: ManagedBy
+      value: ack
+    - key: Purpose
+      value: eks-cluster-role
