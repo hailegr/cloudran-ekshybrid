@@ -1,0 +1,275 @@
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: eks-cluster-hybrid
+  namespace: kro-system
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: EKSClusterHybrid
+    spec:
+      clusterName: string
+      region: string
+      vpcCIDR: string
+      kubernetesVersion: string
+      clusterRoleARN: string
+      # Hybrid nodes configuration (optional)
+      remoteNodeCIDRs: string[] | default=[]
+      remotePodCIDRs: string[] | default=[]
+      # API access configuration
+      endpointPublicAccess: boolean | default=true
+      endpointPrivateAccess: boolean | default=true
+  
+  resources:
+    # 1. VPC
+    - id: vpc
+      readyWhen:
+        - ${vpc.status.state == "available"}
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: VPC
+        metadata:
+          name: ${schema.spec.clusterName}-vpc
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          cidrBlocks:
+            - ${schema.spec.vpcCIDR}
+          enableDNSSupport: true
+          enableDNSHostnames: true
+    
+    # 2. Internet Gateway
+    - id: igw
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: InternetGateway
+        metadata:
+          name: ${schema.spec.clusterName}-igw
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          vpc: ${vpc.status.vpcID}
+    
+    # 3. Public Subnet 1 (AZ a)
+    - id: publicSubnet1
+      readyWhen:
+        - ${publicSubnet1.status.state == "available"}
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: Subnet
+        metadata:
+          name: ${schema.spec.clusterName}-public-1a
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          availabilityZone: ${schema.spec.region}a
+          cidrBlock: "12.10.0.0/24"
+          mapPublicIPOnLaunch: true
+          vpcID: ${vpc.status.vpcID}
+    
+    # 4. Public Subnet 2 (AZ c)
+    - id: publicSubnet2
+      readyWhen:
+        - ${publicSubnet2.status.state == "available"}
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: Subnet
+        metadata:
+          name: ${schema.spec.clusterName}-public-1c
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          availabilityZone: ${schema.spec.region}c
+          cidrBlock: "12.10.1.0/24"
+          mapPublicIPOnLaunch: true
+          vpcID: ${vpc.status.vpcID}
+    
+    # 5. Private Subnet 1 (AZ a)
+    - id: privateSubnet1
+      readyWhen:
+        - ${privateSubnet1.status.state == "available"}
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: Subnet
+        metadata:
+          name: ${schema.spec.clusterName}-private-1a
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          availabilityZone: ${schema.spec.region}a
+          cidrBlock: "12.10.10.0/24"
+          vpcID: ${vpc.status.vpcID}
+    
+    # 6. Private Subnet 2 (AZ c)
+    - id: privateSubnet2
+      readyWhen:
+        - ${privateSubnet2.status.state == "available"}
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: Subnet
+        metadata:
+          name: ${schema.spec.clusterName}-private-1c
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          availabilityZone: ${schema.spec.region}c
+          cidrBlock: "12.10.11.0/24"
+          vpcID: ${vpc.status.vpcID}
+    
+    # 7. Elastic IP for NAT Gateway
+    - id: natEIP
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: ElasticIPAddress
+        metadata:
+          name: ${schema.spec.clusterName}-nat-eip
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec: {}
+    
+    # 8. NAT Gateway
+    - id: natGateway
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: NATGateway
+        metadata:
+          name: ${schema.spec.clusterName}-nat
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          allocationID: ${natEIP.status.allocationID}
+          subnetID: ${publicSubnet1.status.subnetID}
+    
+    # 9. Public Route Table
+    - id: publicRouteTable
+      readyWhen:
+        - ${publicRouteTable.status.routeTableID != ""}
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: RouteTable
+        metadata:
+          name: ${schema.spec.clusterName}-public-rt
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          vpcID: ${vpc.status.vpcID}
+          routes:
+            - destinationCIDRBlock: "0.0.0.0/0"
+              gatewayID: ${igw.status.internetGatewayID}
+    
+    # 10. Private Route Table
+    - id: privateRouteTable
+      readyWhen:
+        - ${privateRouteTable.status.routeTableID != ""}
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: RouteTable
+        metadata:
+          name: ${schema.spec.clusterName}-private-rt
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          vpcID: ${vpc.status.vpcID}
+          routes:
+            - destinationCIDRBlock: "0.0.0.0/0"
+              natGatewayID: ${natGateway.status.natGatewayID}
+    
+    # 11. Public Subnet 1 Route Table Association
+    - id: publicSubnet1Association
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: RouteTableAssociation
+        metadata:
+          name: ${schema.spec.clusterName}-public-1a-assoc
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          routeTableID: ${publicRouteTable.status.routeTableID}
+          subnetID: ${publicSubnet1.status.subnetID}
+    
+    # 12. Public Subnet 2 Route Table Association
+    - id: publicSubnet2Association
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: RouteTableAssociation
+        metadata:
+          name: ${schema.spec.clusterName}-public-1c-assoc
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          routeTableID: ${publicRouteTable.status.routeTableID}
+          subnetID: ${publicSubnet2.status.subnetID}
+    
+    # 13. Private Subnet 1 Route Table Association
+    - id: privateSubnet1Association
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: RouteTableAssociation
+        metadata:
+          name: ${schema.spec.clusterName}-private-1a-assoc
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          routeTableID: ${privateRouteTable.status.routeTableID}
+          subnetID: ${privateSubnet1.status.subnetID}
+    
+    # 14. Private Subnet 2 Route Table Association
+    - id: privateSubnet2Association
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: RouteTableAssociation
+        metadata:
+          name: ${schema.spec.clusterName}-private-1c-assoc
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          routeTableID: ${privateRouteTable.status.routeTableID}
+          subnetID: ${privateSubnet2.status.subnetID}
+    
+    # 15. Cluster Security Group
+    - id: clusterSG
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: SecurityGroup
+        metadata:
+          name: ${schema.spec.clusterName}-sg
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: ${schema.spec.clusterName}-sg
+          description: "EKS hybrid cluster security group"
+          vpcID: ${vpc.status.vpcID}
+    
+    # 16. EKS Cluster with Hybrid Nodes
+    - id: eksCluster
+      readyWhen:
+        - ${eksCluster.status.status == "ACTIVE"}
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: Cluster
+        metadata:
+          name: ${schema.spec.clusterName}
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          name: ${schema.spec.clusterName}
+          version: ${schema.spec.kubernetesVersion}
+          roleARN: ${schema.spec.clusterRoleARN}
+          resourcesVPCConfig:
+            subnetIDs:
+              - ${publicSubnet1.status.subnetID}
+              - ${publicSubnet2.status.subnetID}
+              - ${privateSubnet1.status.subnetID}
+              - ${privateSubnet2.status.subnetID}
+            securityGroupIDs:
+              - ${clusterSG.status.id}
+            endpointPublicAccess: ${schema.spec.endpointPublicAccess}
+            endpointPrivateAccess: ${schema.spec.endpointPrivateAccess}
+          # Only include remoteNetworkConfig if CIDRs are provided
+          # Note: KRO doesn't support conditional fields, so this will always be included
+          # For non-hybrid clusters, just provide empty arrays in the instance
+          remoteNetworkConfig:
+            remoteNodeNetworks:
+              - cidrs: ${schema.spec.remoteNodeCIDRs}
+            remotePodNetworks:
+              - cidrs: ${schema.spec.remotePodCIDRs}
