@@ -63,6 +63,9 @@ spec:
           cidrBlock: "12.10.0.0/24"
           mapPublicIPOnLaunch: true
           vpcID: ${vpc.status.vpcID}
+          routeTableRefs:
+            - from:
+                name: ${schema.spec.clusterName}-public-rt
     
     # 4. Public Subnet 2 (AZ c)
     - id: publicSubnet2
@@ -80,6 +83,9 @@ spec:
           cidrBlock: "12.10.1.0/24"
           mapPublicIPOnLaunch: true
           vpcID: ${vpc.status.vpcID}
+          routeTableRefs:
+            - from:
+                name: ${schema.spec.clusterName}-public-rt
     
     # 5. Private Subnet 1 (AZ a)
     - id: privateSubnet1
@@ -96,6 +102,9 @@ spec:
           availabilityZone: ${schema.spec.region}a
           cidrBlock: "12.10.10.0/24"
           vpcID: ${vpc.status.vpcID}
+          routeTableRefs:
+            - from:
+                name: ${schema.spec.clusterName}-private-rt
     
     # 6. Private Subnet 2 (AZ c)
     - id: privateSubnet2
@@ -112,6 +121,9 @@ spec:
           availabilityZone: ${schema.spec.region}c
           cidrBlock: "12.10.11.0/24"
           vpcID: ${vpc.status.vpcID}
+          routeTableRefs:
+            - from:
+                name: ${schema.spec.clusterName}-private-rt
     
     # 7. Elastic IP for NAT Gateway
     - id: natEIP
