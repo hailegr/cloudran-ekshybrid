@@ -234,3 +234,71 @@ spec:
             remotePodNetworks:
               - cidrs:
                   - ${schema.spec.remotePodCIDR}
+    
+    # 13. EKS Access Entry for Cluster Role
+    - id: clusterRoleAccessEntry
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: AccessEntry
+        metadata:
+          name: ${schema.spec.clusterName}-cluster-role
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          clusterName: ${schema.spec.clusterName}
+          principalARN: ${schema.spec.clusterRoleARN}
+          type: STANDARD
+          accessPolicies:
+            - policyARN: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+              accessScope:
+                type: cluster
+    
+    # 13. ArgoCD Service Account
+    - id: argoCDServiceAccount
+      template:
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: argocd-manager
+          namespace: kube-system
+    
+    # 14. ArgoCD ClusterRoleBinding
+    - id: argoCDClusterRoleBinding
+      template:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: argocd-manager-admin
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: cluster-admin
+        subjects:
+          - kind: ServiceAccount
+            name: argocd-manager
+            namespace: kube-system
+    
+    # 15. ArgoCD Cluster Registration
+    - id: argoCDCluster
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${schema.spec.clusterName}-cluster
+          namespace: argocd
+          labels:
+            argocd.argoproj.io/secret-type: cluster
+        type: Opaque
+        stringData:
+          name: ${schema.spec.clusterName}
+          server: ${eksCluster.status.endpoint}
+          config: |
+            {
+              "awsAuthConfig": {
+                "clusterName": "${schema.spec.clusterName}"
+              },
+              "tlsClientConfig": {
+                "insecure": false,
+                "caData": "${eksCluster.status.certificateAuthority.data}"
+              }
+            }
