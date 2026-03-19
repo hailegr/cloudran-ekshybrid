@@ -13,12 +13,12 @@ spec:
       vpcCIDR: string
       kubernetesVersion: string
       clusterRoleARN: string
-      # Hybrid nodes configuration (optional)
-      remoteNodeCIDRs: "string[] | default=[]"
-      remotePodCIDRs: "string[] | default=[]"
       # API access configuration
       endpointPublicAccess: boolean | default=true
       endpointPrivateAccess: boolean | default=true
+      # Hybrid nodes configuration
+      remoteNodeCIDRs: "[]string"
+      remotePodCIDRs: "[]string"
   
   resources:
     # 1. VPC
@@ -213,11 +213,8 @@ spec:
               - ${clusterSG.status.id}
             endpointPublicAccess: ${schema.spec.endpointPublicAccess}
             endpointPrivateAccess: ${schema.spec.endpointPrivateAccess}
-          # Only include remoteNetworkConfig if CIDRs are provided
-          # Note: KRO doesn't support conditional fields, so this will always be included
-          # For non-hybrid clusters, just provide empty arrays in the instance
           remoteNetworkConfig:
-            remoteNodeNetworks:
-              - cidrs: ${schema.spec.remoteNodeCIDRs}
+            remoteNodeNetworks: ${schema.spec.remoteNodeCIDRs.map(cidr, {"cidrs": [cidr]})}
+            remotePodNetworks: ${schema.spec.remotePodCIDRs.map(cidr, {"cidrs": [cidr]})}
             remotePodNetworks:
               - cidrs: ${schema.spec.remotePodCIDRs}
