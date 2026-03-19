@@ -212,6 +212,8 @@ spec:
           name: ${schema.spec.clusterName}
           version: ${schema.spec.kubernetesVersion}
           roleARN: ${schema.spec.clusterRoleARN}
+          accessConfig:
+            authenticationMode: API_AND_CONFIG_MAP
           resourcesVPCConfig:
             subnetIDs:
               - ${publicSubnet1.status.subnetID}
