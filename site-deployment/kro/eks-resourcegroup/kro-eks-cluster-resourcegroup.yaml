@@ -136,6 +136,8 @@ spec:
     
     # 9. Public Route Table
     - id: publicRouteTable
+      readyWhen:
+        - ${publicRouteTable.status.routeTableID != ""}
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: RouteTable
@@ -151,6 +153,8 @@ spec:
     
     # 10. Private Route Table
     - id: privateRouteTable
+      readyWhen:
+        - ${privateRouteTable.status.routeTableID != ""}
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
         kind: RouteTable
@@ -164,7 +168,59 @@ spec:
             - destinationCIDRBlock: "0.0.0.0/0"
               natGatewayID: ${natGateway.status.natGatewayID}
     
-    # 11. Cluster Security Group
+    # 11. Public Subnet 1 Route Table Association
+    - id: publicSubnet1Association
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: RouteTableAssociation
+        metadata:
+          name: ${schema.spec.clusterName}-public-1a-assoc
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          routeTableID: ${publicRouteTable.status.routeTableID}
+          subnetID: ${publicSubnet1.status.subnetID}
+    
+    # 12. Public Subnet 2 Route Table Association
+    - id: publicSubnet2Association
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: RouteTableAssociation
+        metadata:
+          name: ${schema.spec.clusterName}-public-1c-assoc
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          routeTableID: ${publicRouteTable.status.routeTableID}
+          subnetID: ${publicSubnet2.status.subnetID}
+    
+    # 13. Private Subnet 1 Route Table Association
+    - id: privateSubnet1Association
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: RouteTableAssociation
+        metadata:
+          name: ${schema.spec.clusterName}-private-1a-assoc
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          routeTableID: ${privateRouteTable.status.routeTableID}
+          subnetID: ${privateSubnet1.status.subnetID}
+    
+    # 14. Private Subnet 2 Route Table Association
+    - id: privateSubnet2Association
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: RouteTableAssociation
+        metadata:
+          name: ${schema.spec.clusterName}-private-1c-assoc
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          routeTableID: ${privateRouteTable.status.routeTableID}
+          subnetID: ${privateSubnet2.status.subnetID}
+    
+    # 15. Cluster Security Group
     - id: clusterSG
       template:
         apiVersion: ec2.services.k8s.aws/v1alpha1
@@ -178,7 +234,7 @@ spec:
           description: "EKS cluster security group"
           vpcID: ${vpc.status.vpcID}
     
-    # 12. EKS Cluster
+    # 16. EKS Cluster
     - id: eksCluster
       readyWhen:
         - ${eksCluster.status.status == "ACTIVE"}
