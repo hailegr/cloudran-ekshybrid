@@ -320,7 +320,6 @@ spec:
         spec:
           name: eks-pod-identity-agent
           clusterName: ${schema.spec.clusterName}
-          addonName: eks-pod-identity-agent
     
     # 17. CloudWatch Observability Add-on
     - id: cloudwatchAddon
@@ -334,7 +333,6 @@ spec:
         spec:
           name: amazon-cloudwatch-observability
           clusterName: ${schema.spec.clusterName}
-          addonName: amazon-cloudwatch-observability
     
     # 18. CoreDNS Add-on
     - id: coreDNSAddon
@@ -348,7 +346,6 @@ spec:
         spec:
           name: coredns
           clusterName: ${schema.spec.clusterName}
-          addonName: coredns
           resolveConflicts: OVERWRITE
     
     # 19. Kube-proxy Add-on
@@ -363,5 +360,4 @@ spec:
         spec:
           name: kube-proxy
           clusterName: ${schema.spec.clusterName}
-          addonName: kube-proxy
           resolveConflicts: OVERWRITE
