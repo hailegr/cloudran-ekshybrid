@@ -55,6 +55,7 @@ metadata:
   namespace: ack-system
   annotations:
     services.k8s.aws/region: us-west-1
+    argocd.argoproj.io/sync-options: IgnoreExtraneous=true
 spec:
   name: amazon-cloudwatch-observability
   clusterName: eksclusterhybrid-1111
