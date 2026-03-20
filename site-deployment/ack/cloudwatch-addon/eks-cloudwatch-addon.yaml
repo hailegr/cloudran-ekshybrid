@@ -41,6 +41,7 @@ metadata:
   annotations:
     services.k8s.aws/region: us-west-1
 spec:
+  name: eks-pod-identity-agent
   clusterName: eksclusterhybrid-1111
   addonName: eks-pod-identity-agent
 
@@ -69,5 +70,6 @@ metadata:
   annotations:
     services.k8s.aws/region: us-west-1
 spec:
+  name: amazon-cloudwatch-observability
   clusterName: eksclusterhybrid-1111
   addonName: amazon-cloudwatch-observability
