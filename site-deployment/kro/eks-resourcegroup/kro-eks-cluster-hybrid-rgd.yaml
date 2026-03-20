@@ -322,7 +322,22 @@ spec:
           name: eks-pod-identity-agent
           clusterName: ${schema.spec.clusterName}
     
-    # 17. CloudWatch Observability Add-on
+    # 17. Pod Identity Association for CloudWatch Observability
+    - id: cloudwatchPodIdentity
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: PodIdentityAssociation
+        metadata:
+          name: ${schema.spec.clusterName}-cloudwatch-pia
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+        spec:
+          clusterName: ${schema.spec.clusterName}
+          namespace: amazon-cloudwatch
+          serviceAccount: cloudwatch-agent
+          roleARN: ${schema.spec.cloudwatchRoleARN}
+    
+    # 18. CloudWatch Observability Add-on
     - id: cloudwatchAddon
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
@@ -335,7 +350,7 @@ spec:
           name: amazon-cloudwatch-observability
           clusterName: ${schema.spec.clusterName}
     
-    # 18. CoreDNS Add-on
+    # 19. CoreDNS Add-on
     - id: coreDNSAddon
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
@@ -349,7 +364,7 @@ spec:
           clusterName: ${schema.spec.clusterName}
           resolveConflicts: OVERWRITE
     
-    # 19. Kube-proxy Add-on
+    # 20. Kube-proxy Add-on
     - id: kubeProxyAddon
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
