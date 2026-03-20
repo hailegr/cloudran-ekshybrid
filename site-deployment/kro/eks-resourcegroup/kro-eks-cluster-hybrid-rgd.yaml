@@ -313,6 +313,7 @@ spec:
           annotations:
             services.k8s.aws/region: ${schema.spec.region}
         spec:
+          name: eks-pod-identity-agent
           clusterName: ${schema.spec.clusterName}
           addonName: eks-pod-identity-agent
     
@@ -341,5 +342,6 @@ spec:
           annotations:
             services.k8s.aws/region: ${schema.spec.region}
         spec:
+          name: amazon-cloudwatch-observability
           clusterName: ${schema.spec.clusterName}
           addonName: amazon-cloudwatch-observability
