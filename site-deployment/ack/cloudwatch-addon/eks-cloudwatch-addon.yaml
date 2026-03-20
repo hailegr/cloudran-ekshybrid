@@ -40,28 +40,14 @@ metadata:
   namespace: ack-system
   annotations:
     services.k8s.aws/region: us-west-1
+    argocd.argoproj.io/sync-options: IgnoreExtraneous=true
 spec:
   name: eks-pod-identity-agent
   clusterName: eksclusterhybrid-1111
   addonName: eks-pod-identity-agent
 
 ---
-# 3. Pod Identity Association for CloudWatch Observability
-apiVersion: eks.services.k8s.aws/v1alpha1
-kind: PodIdentityAssociation
-metadata:
-  name: cloudwatch-observability-1111
-  namespace: ack-system
-  annotations:
-    services.k8s.aws/region: us-west-1
-spec:
-  clusterName: eksclusterhybrid-1111
-  namespace: amazon-cloudwatch
-  serviceAccount: cloudwatch-agent
-  roleARN: arn:aws:iam::242201304709:role/EKSCloudWatchObservabilityRole
-
----
-# 4. CloudWatch Observability Add-on
+# 3. CloudWatch Observability Add-on with Pod Identity
 apiVersion: eks.services.k8s.aws/v1alpha1
 kind: Addon
 metadata:
@@ -73,3 +59,6 @@ spec:
   name: amazon-cloudwatch-observability
   clusterName: eksclusterhybrid-1111
   addonName: amazon-cloudwatch-observability
+  podIdentityAssociations:
+    - serviceAccount: cloudwatch-agent
+      roleARN: arn:aws:iam::242201304709:role/EKSCloudWatchObservabilityRole
