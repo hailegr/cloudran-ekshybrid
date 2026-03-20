@@ -1,6 +1,9 @@
 apiVersion: kro.run/v1alpha1
 kind: EKSClusterHybrid
 metadata:
+  name: ekscluapiVersion: kro.run/v1alpha1
+kind: EKSClusterHybrid
+metadata:
   name: eksclusterhybrid-2000
   namespace: kro-system
 spec:
@@ -11,6 +14,12 @@ spec:
   clusterRoleARN: "arn:aws:iam::242201304709:role/eksClusterRole"
   endpointPublicAccess: true
   endpointPrivateAccess: true
-  # Hybrid node configuration (optional, defaults provided)
+  # Hybrid node configuration
   remoteNodeCIDR: "192.168.10.0/24"
   remotePodCIDR: "192.168.11.0/24"
+  # Subnet CIDRs (must be within VPC CIDR)
+  publicSubnet1CIDR: "11.10.0.0/24"
+  publicSubnet2CIDR: "11.10.1.0/24"
+  privateSubnet1CIDR: "11.10.10.0/24"
+  privateSubnet2CIDR: "11.10.11.0/24"
+
