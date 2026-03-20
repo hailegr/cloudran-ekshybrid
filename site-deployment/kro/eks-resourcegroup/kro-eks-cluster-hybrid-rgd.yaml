@@ -13,6 +13,7 @@ spec:
       vpcCIDR: string
       kubernetesVersion: string
       clusterRoleARN: string
+      cloudwatchRoleARN: string
       # API access configuration
       endpointPublicAccess: boolean | default=true
       endpointPrivateAccess: boolean | default=true
