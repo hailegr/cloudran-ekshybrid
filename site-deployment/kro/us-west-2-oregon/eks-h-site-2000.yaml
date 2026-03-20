@@ -9,6 +9,7 @@ spec:
   vpcCIDR: "11.10.0.0/16"
   kubernetesVersion: "1.35"
   clusterRoleARN: "arn:aws:iam::242201304709:role/eksClusterRole"
+  cloudwatchRoleARN: "arn:aws:iam::242201304709:role/EKSCloudWatchObservabilityRole"
   endpointPublicAccess: true
   endpointPrivateAccess: true
   # Hybrid node configuration
