@@ -259,32 +259,7 @@ spec:
               accessScope:
                 type: cluster
     
-    # 13. ArgoCD Service Account
-    - id: argoCDServiceAccount
-      template:
-        apiVersion: v1
-        kind: ServiceAccount
-        metadata:
-          name: argocd-manager
-          namespace: kube-system
-    
-    # 14. ArgoCD ClusterRoleBinding
-    - id: argoCDClusterRoleBinding
-      template:
-        apiVersion: rbac.authorization.k8s.io/v1
-        kind: ClusterRoleBinding
-        metadata:
-          name: argocd-manager-admin
-        roleRef:
-          apiGroup: rbac.authorization.k8s.io
-          kind: ClusterRole
-          name: cluster-admin
-        subjects:
-          - kind: ServiceAccount
-            name: argocd-manager
-            namespace: kube-system
-    
-    # 15. ArgoCD Cluster Registration
+    # 14. ArgoCD Cluster Registration
     - id: argoCDCluster
       template:
         apiVersion: v1
@@ -309,7 +284,7 @@ spec:
               }
             }
     
-    # 16. EKS Pod Identity Agent Add-on
+    # 15. EKS Pod Identity Agent Add-on
     - id: podIdentityAgent
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
@@ -322,7 +297,7 @@ spec:
           name: eks-pod-identity-agent
           clusterName: ${schema.spec.clusterName}
     
-    # 17. Pod Identity Association for CloudWatch Observability
+    # 16. Pod Identity Association for CloudWatch Observability
     - id: cloudwatchPodIdentity
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
@@ -337,7 +312,7 @@ spec:
           serviceAccount: cloudwatch-agent
           roleARN: ${schema.spec.cloudwatchRoleARN}
     
-    # 18. CloudWatch Observability Add-on
+    # 17. CloudWatch Observability Add-on
     - id: cloudwatchAddon
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
@@ -350,7 +325,7 @@ spec:
           name: amazon-cloudwatch-observability
           clusterName: ${schema.spec.clusterName}
     
-    # 19. CoreDNS Add-on
+    # 18. CoreDNS Add-on
     - id: coreDNSAddon
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
@@ -364,7 +339,7 @@ spec:
           clusterName: ${schema.spec.clusterName}
           resolveConflicts: OVERWRITE
     
-    # 20. Kube-proxy Add-on
+    # 19. Kube-proxy Add-on
     - id: kubeProxyAddon
       template:
         apiVersion: eks.services.k8s.aws/v1alpha1
