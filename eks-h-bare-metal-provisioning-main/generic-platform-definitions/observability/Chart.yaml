@@ -1,0 +1,4 @@
+apiVersion: v2
+name: observability
+description: Grafana Operator CRs — datasource and dashboards for AMG
+version: 0.1.0

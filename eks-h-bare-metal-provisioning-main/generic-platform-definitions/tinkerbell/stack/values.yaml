@@ -1,0 +1,54 @@
+# Tinkerbell stack Helm values — generic defaults for EKS-H workload clusters.
+# Chart: oci://ghcr.io/tinkerbell/charts/tinkerbell v0.22.1
+# ISO Boot mode: HookOS ISO served via nginx, mounted via Rufio/Redfish.
+# DHCP disabled — using Redfish Virtual ISO mount.
+# Site-specific values (publicIP, service.annotations, smee config, etc.) are in
+# site-specific-configs/workload-clusters/<cluster>/tinkerbell-values-override.yaml
+
+publicIP: "0.0.0.0"
+artifactsFileServer: "http://0.0.0.0:7173"
+trustedProxies: []
+
+rbac:
+  type: ClusterRole
+
+service:
+  type: LoadBalancer
+  lbClass: ""
+
+deployment:
+  nodeSelector:
+    role: workload
+  replicas: 1  # Tinkerbell controllers (tink-controller, rufio) are not safe to scale
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
+  envs:
+    globals:
+      enableRufioController: true
+      enableSmee: true
+      enableTootles: true
+      enableTinkServer: true
+      enableTinkController: true
+    smee:
+      dhcpEnabled: false
+      isoEnabled: true
+      isoStaticIPAMEnabled: false
+
+optional:
+  kubevip:
+    enabled: false
+  hookos:
+    enabled: true
+    extension: iso
+    arch: x86_64
+    kernelVersion: "6.6"
+    service:
+      type: ClusterIP
+      lbClass: ""
+    persistence:
+      enabled: false

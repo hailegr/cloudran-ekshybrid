@@ -1,0 +1,4 @@
+apiVersion: v2
+name: bare-metal
+description: Unified bare metal provisioning — Templates, SSM activations, endpoint resolution, and BareMetalServer kro instances
+version: 0.1.0

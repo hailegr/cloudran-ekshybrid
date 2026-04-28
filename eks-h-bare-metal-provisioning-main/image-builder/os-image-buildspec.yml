@@ -1,0 +1,38 @@
+version: 0.2
+
+env:
+  variables:
+    OS: "ubuntu24"
+    K8S_VERSION: "1.35"
+    CREDENTIAL_PROVIDER: "ssm"
+    NODEADM_ARCH: "amd"
+    EXTRA_PACKAGES: ""
+
+phases:
+  install:
+    commands:
+      - echo "Installing tools..."
+      - apt-get update && apt-get install -y --no-install-recommends
+          libguestfs-tools qemu-utils linux-image-generic python3-yaml curl
+
+  pre_build:
+    commands:
+      - echo "Loading image config for $OS..."
+      - python3 image-builder/load-config.py
+      - cat /tmp/image-config.env
+
+  build:
+    commands:
+      - export $(cat /tmp/image-config.env | xargs)
+      - bash image-builder/os-image-build.sh
+
+  post_build:
+    commands:
+      - echo "Uploading to S3..."
+      - ARCHIVE=$(ls output/*.tar.gz)
+      - CHECKSUM=$(ls output/*.tar.gz.sha256)
+      - aws s3 cp "$ARCHIVE" "s3://${IMAGE_BUCKET}/images/" --no-progress
+      - aws s3 cp "$CHECKSUM" "s3://${IMAGE_BUCKET}/images/" --no-progress
+      - echo "Upload complete"
+      - echo "Archive=$(basename $ARCHIVE)"
+      - echo "Checksum=$(cat $CHECKSUM)"

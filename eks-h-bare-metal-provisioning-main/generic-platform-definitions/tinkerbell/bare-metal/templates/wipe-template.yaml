@@ -1,0 +1,33 @@
+{{- /* Wipe template — one per machineProfile. Boots HookOS, wipes all disks. */ -}}
+{{- $rendered := dict -}}
+{{- range .Values.servers }}
+{{- if not (hasKey $rendered .machineProfile) }}
+{{- $_ := set $rendered .machineProfile true }}
+{{- $mp := index $.Values.machineProfiles .machineProfile }}
+---
+apiVersion: tinkerbell.org/v1alpha1
+kind: Template
+metadata:
+  name: wipe-{{ .machineProfile }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  data: |
+    version: "0.1"
+    name: wipe-{{ .machineProfile }}
+    global_timeout: 600
+    tasks:
+      - name: "wipe"
+        worker: "{{`{{.device_1}}`}}"
+        volumes:
+          - /dev:/dev
+          - /dev/console:/dev/console
+        actions:
+          - name: "wipe-disks"
+            image: {{`{{.registry}}`}}/{{ $.Values.actionImages.diskTools }}
+            timeout: 120
+            environment:
+              DEST_DISK: {{`{{.dest_disk}}`}}
+              SCRIPT: "efibootmgr -v | grep -i ubuntu | grep -oP 'Boot\\K[0-9A-Fa-f]+' | xargs -I{} efibootmgr -Bb {} 2>/dev/null || true && wipefs -af $DEST_DISK && blkdiscard -f $DEST_DISK 2>/dev/null || true && echo 'Disk and UEFI entries wiped'"
+            command: ["/bin/sh", "-c", "eval \"$SCRIPT\""]
+{{- end }}
+{{- end }}

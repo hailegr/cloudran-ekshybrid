@@ -1,0 +1,12 @@
+apiVersion: grafana.integreatly.org/v1beta1
+kind: Grafana
+metadata:
+  name: amg
+  labels:
+    dashboards: amg
+spec:
+  external:
+    url: {{ .Values.grafanaEndpoint }}
+    apiKey:
+      name: grafana-service-account-token
+      key: token

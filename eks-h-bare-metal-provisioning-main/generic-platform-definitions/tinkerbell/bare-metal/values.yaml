@@ -1,0 +1,65 @@
+# Cluster-level settings (populated by ArgoCD from top-level values.yaml)
+cluster:
+  name: ""
+  region: ""
+  hybridNodesRole: ""
+
+# Machine profiles — hardware-specific disk paths
+# Add one profile per server model. Reference by name in server-groups/*.yaml.
+machineProfiles:
+  poweredge-xr8000r-2disk:
+    dest_disk: /dev/nvme0n1
+    efi_partition: /dev/nvme0n1p1
+    root_partition: /dev/nvme0n1p2
+
+# OS profiles — image and boot settings
+# archive/archiveChecksum: set after running the image-builder pipeline (see image-builder/README.md)
+# rootSetup: configure per your security policy
+osProfiles:
+  ubuntu-noble:
+    archive: ""                     # e.g. ubuntu24-eks-1.35-amd64.tar.gz
+    archiveType: targz
+    archiveChecksum: ""             # e.g. sha256:abc123... (from image build output)
+    kernelPath: /boot/vmlinuz
+    initrdPath: /boot/initrd.img
+    fsType: ext4
+    rootSetup:
+      password: ""                  # Set a root password or leave empty to disable
+      permitRootLogin: false        # Set true only if needed for debugging
+
+# Tuning profiles — kernel and runtime performance tuning
+# Reference by name in server-groups/*.yaml. Use "none" for no tuning.
+tuningProfiles:
+  none: {}
+  high-performance:
+    kernelCmdline: "intel_iommu=on iommu=pt hugepagesz=1G hugepages=8 isolcpus=2-15 nohz_full=2-15 rcu_nocbs=2-15"
+    sysctl:
+      vm.nr_hugepages: "2048"
+      net.core.rmem_max: "16777216"
+      net.core.wmem_max: "16777216"
+      net.core.busy_poll: "50"
+      net.core.busy_read: "50"
+    disabledServices:
+      - irqbalance
+
+# Network profiles — one per bare metal subnet
+# Add your site's network profiles here. Reference by name in server-groups/*.yaml.
+networkProfiles: {}
+  # example-subnet:
+  #   gateway: 192.168.1.1
+  #   netmask: 255.255.255.0
+  #   netmaskCIDR: "24"
+  #   dns:
+  #     - 192.168.1.1
+
+# Servers to provision (populated from server-groups/*.yaml by ArgoCD ApplicationSet)
+servers: []
+
+# Action images — short names stored in the action-registry.
+# tink-agent's docker_registry kernel arg prepends the registry address at boot,
+# so templates use short names only (e.g. disk-tools:3.20, not <ip>:5000/disk-tools:3.20).
+actionImages:
+  diskTools: disk-tools:3.20
+  writefile: writefile:v1.0.0
+  cexec: cexec:v1.0.0
+  kexec: kexec:v1.0.0

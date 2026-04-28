@@ -1,0 +1,4 @@
+apiVersion: v2
+name: workload-apps
+description: Workload cluster applications — Tinkerbell, Cilium, LBC, platform
+version: 0.1.0

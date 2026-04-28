@@ -1,0 +1,67 @@
+# Example site configuration — copy to values.yaml and fill in your values
+# Trigger resync: 2026-04-08 04:45 - Force secret refresh
+
+git:
+  repoURL: "https://codeconnections.us-east-2.amazonaws.com/git-http/242201304709/us-east-2/a6d58f57-c24f-4395-9436-637ea5e4c46f/hailegr/cloudran-ekshybrid.git"
+  branch: main
+  # Workload cluster Git URL (uses workload account CodeConnection)
+  workloadRepoURL: "https://codeconnections.us-west-1.amazonaws.com/git-http/833542146025/us-west-1/7affbbbd-bc86-49c7-bc5c-98ef30f287d0/hailegr/cloudran-ekshybrid.git"
+
+
+aws:
+  accountId: "833542146025"
+  region: us-west-1
+  vpcId: vpc-07e88daa42cfa2b79
+  # Using private subnets for cluster to enable site-to-site VPN connectivity
+  # Private subnets have Transit Gateway routes to bare metal networks (192.168.30.0/24, 192.168.31.0/24)
+  subnets:
+    - subnet-0a3dc8360cbc8c799  # Private subnet us-west-1a (/19)
+    - subnet-036e83621d87f57b6  # Private subnet us-west-1c (/19)
+
+mgmtCluster:
+  name: useast-2-gitops-mgmt-v2
+  accountId: "242201304709"
+  region: us-east-2
+
+iam:
+  # Capability roles must be in the WORKLOAD account (same account as the cluster)
+  # These roles are used by EKS to create the capabilities on the workload cluster
+  argoCDCapabilityRole: arn:aws:iam::833542146025:role/eks-h-mgmt-cluster-CL-argocd-role
+  ackCapabilityRole: arn:aws:iam::833542146025:role/eks-h-mgmt-cluster-CL-ack-role
+  
+  # Cross-account role for ACK to assume when creating infrastructure resources
+  # This is the workload account role that the management account ACK will assume
+  crossAccountACKRole: arn:aws:iam::833542146025:role/eks-h-assume-mgmt-cluster-ack-role
+  
+  # Cross-account role for ArgoCD to assume when accessing the workload cluster
+  # This is the workload account role that the management account ArgoCD will assume
+  crossAccountArgoCDRole: arn:aws:iam::833542146025:role/eks-h-assume-mgmt-cluster-argocd-role
+
+argoCD:
+  idcInstanceARN: arn:aws:sso:::instance/ssoins-7223963920aa22a0
+  idcRegion: us-east-1
+  rbacRoleMappings:
+    - role: ADMIN
+      identities:
+        - id: 94685488-00c1-70a2-748a-bf13c212b6a3
+          type: SSO_USER
+        - id: d4a8c438-e0d1-7018-ae71-296c753288d7
+          type: SSO_USER
+
+accessEntries:
+  adminPrincipals:
+    - arn:aws:iam::833542146025:role/Bastion-Admin-Role
+
+bareMetalNetwork:
+  cidr: "192.168.31.0/24"
+
+hybridPodCIDR: "172.16.0.0/16"
+
+nodegroup:
+  instanceTypes:
+    - m5.4xlarge
+  desiredSize: 2
+  minSize: 2
+  maxSize: 2
+
+workloadClusters: {}

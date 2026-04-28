@@ -1,0 +1,122 @@
+# ResourceGraphDefinition: BareMetalDeprovision
+#
+# Deprovisioning lifecycle — only created when provision=false.
+# Drains the node from EKS, then boots HookOS to wipe disks and power off.
+#
+# Dependency graph:
+#   drainJob (readyWhen: succeeded)
+#   endpoints (externalRef, readyWhen: LB IPs present)
+#       │
+#       └── wipeWorkflow (customboot: boot HookOS, wipe, power off)
+#
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: bare-metal-deprovision
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: BareMetalDeprovision
+    spec:
+      name: string
+      mac: string
+      machineProfile: string
+      destDisk: string
+      namespace: string
+      provisionHash: string | default="v1"
+    status:
+      drainJobStatus: '${drainJob.status.?succeeded.orValue(0) > 0 ? "Complete" : "Running"}'
+      wipeWorkflowName: ${wipeWorkflow.metadata.name}
+      wipeWorkflowState: ${wipeWorkflow.status.?state.orValue("PENDING")}
+      endpointsReady: ${endpoints.data.?tinkerbellIP.orValue("") != ""}
+
+  resources:
+    - id: drainJob
+      template:
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          name: ${schema.spec.name + "-deprovision-" + schema.spec.provisionHash}
+          namespace: ${schema.spec.namespace}
+        spec:
+          backoffLimit: 3
+          ttlSecondsAfterFinished: 3600
+          template:
+            spec:
+              serviceAccountName: node-deprovisioner
+              restartPolicy: OnFailure
+              affinity:
+                nodeAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    nodeSelectorTerms:
+                      - matchExpressions:
+                          - key: eks.amazonaws.com/compute-type
+                            operator: DoesNotExist
+              containers:
+                - name: drain-node
+                  image: public.ecr.aws/bitnami/kubectl:1.35.4
+                  command: ["/bin/bash", "/scripts/drain-node.sh"]
+                  env:
+                    - name: MACHINE_NAME
+                      value: ${schema.spec.name}
+                    - name: PROVISION
+                      value: "false"
+                  volumeMounts:
+                    - name: scripts
+                      mountPath: /scripts
+                      readOnly: true
+              volumes:
+                - name: scripts
+                  configMap:
+                    name: bare-metal-scripts
+                    defaultMode: 0755
+      readyWhen:
+        - ${drainJob.status.?succeeded.orValue(0) > 0}
+
+    - id: endpoints
+      externalRef:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: tinkerbell-endpoints
+          namespace: ${schema.spec.namespace}
+      readyWhen:
+        - ${endpoints.data.?tinkerbellIP.orValue("") != ""}
+
+    - id: wipeWorkflow
+      template:
+        apiVersion: tinkerbell.org/v1alpha1
+        kind: Workflow
+        metadata:
+          name: ${"wipe-" + schema.spec.name + "-" + schema.spec.provisionHash}
+          namespace: ${schema.spec.namespace}
+          labels:
+            hardware: ${schema.spec.name}
+            drain-job: ${drainJob.metadata.name}
+        spec:
+          templateRef: ${"wipe-" + schema.spec.machineProfile}
+          hardwareRef: ${schema.spec.name}
+          hardwareMap:
+            device_1: ${schema.spec.mac}
+            dest_disk: ${schema.spec.destDisk}
+            registry: ${endpoints.data.?registryIP.orValue("") + ":5000"}
+          bootOptions:
+            bootMode: customboot
+            custombootConfig:
+              preparingActions:
+                - powerAction: "off"
+                - virtualMediaAction:
+                    kind: CD
+                - virtualMediaAction:
+                    kind: CD
+                    mediaURL: ${"http://" + endpoints.data.?tinkerbellIP.orValue("") + ":7171/iso/" + schema.spec.mac + "/hook.iso"}
+                - bootDevice:
+                    device: "cdrom"
+                    efiBoot: true
+                - powerAction: "on"
+              postActions:
+                - powerAction: "off"
+                - virtualMediaAction:
+                    kind: CD
+      readyWhen:
+        - ${wipeWorkflow.status.?state.orValue("") == "SUCCESS"}

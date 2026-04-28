@@ -1,0 +1,264 @@
+{{- /*
+  Templates are generated once per unique machineProfile+osProfile combination.
+  Workflow: wipe → partition → format → extract archive → configure → boot (kexec or reboot)
+*/ -}}
+{{- $rendered := dict -}}
+{{- range .Values.servers }}
+{{- $key := printf "%s-%s" .machineProfile .osProfile -}}
+{{- if not (hasKey $rendered $key) -}}
+{{- $_ := set $rendered $key true }}
+{{- $mp := index $.Values.machineProfiles .machineProfile }}
+{{- $os := index $.Values.osProfiles .osProfile }}
+---
+apiVersion: tinkerbell.org/v1alpha1
+kind: Template
+metadata:
+  name: {{ $key }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    server-group: {{ $.Release.Name }}
+    machine-profile: {{ .machineProfile }}
+    os-profile: {{ .osProfile }}
+spec:
+  data: |
+    version: "0.1"
+    name: {{ $key }}
+    global_timeout: 3600
+    tasks:
+      - name: "provision"
+        worker: "{{`{{.device_1}}`}}"
+        volumes:
+          - /dev:/dev
+          - /dev/console:/dev/console
+          - /lib/firmware:/lib/firmware:ro
+        actions:
+          # --- HW: wipe, partition, and format disk ---
+          - name: "partition-and-format"
+            image: {{`{{.registry}}`}}/{{ $.Values.actionImages.diskTools }}
+            timeout: 120
+            environment:
+              DEST_DISK: {{`{{.dest_disk}}`}}
+              EFI_PARTITION: {{`{{.efi_partition}}`}}
+              ROOT_PARTITION: {{`{{.root_partition}}`}}
+              ROOT_FS_TYPE: {{ $os.fsType }}
+              SCRIPT: "wipefs -af $DEST_DISK && sgdisk -Z $DEST_DISK && sgdisk -n 1:0:+512M -t 1:ef00 -c 1:EFI $DEST_DISK && sgdisk -n 2:0:0 -t 2:8300 -c 2:root $DEST_DISK && partprobe $DEST_DISK && sleep 2 && sgdisk -p $DEST_DISK && mkfs.vfat -F 32 $EFI_PARTITION && mkfs.$ROOT_FS_TYPE -F $ROOT_PARTITION"
+            command: ["/bin/sh", "-c", "eval \"$SCRIPT\""]
+
+          # --- OS: extract filesystem archive to root ---
+          - name: "extract-os-archive"
+            image: {{`{{.registry}}`}}/{{ $.Values.actionImages.diskTools }}
+            timeout: 900
+            environment:
+              ARCHIVE_URL: "{{`{{.archive_url}}`}}"
+              ROOT_PARTITION: {{`{{.root_partition}}`}}
+              SCRIPT: "mkdir -p /mnt && mount $ROOT_PARTITION /mnt && wget -qO- $ARCHIVE_URL | tar xzf - -C /mnt && umount /mnt"
+            command: ["/bin/sh", "-c", "eval \"$SCRIPT\""]
+
+          # --- HW: mount EFI partition and install bootloader files ---
+          - name: "setup-efi"
+            image: {{`{{.registry}}`}}/{{ $.Values.actionImages.cexec }}
+            timeout: 90
+            environment:
+              BLOCK_DEVICE: {{`{{.root_partition}}`}}
+              FS_TYPE: {{ $os.fsType }}
+              CHROOT: "y"
+              DEFAULT_INTERPRETER: "/bin/sh -c"
+              CMD_LINE: |
+                mkdir -p /boot/efi
+                mount {{`{{.efi_partition}}`}} /boot/efi
+                grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=ubuntu --no-nvram
+                update-grub
+                umount /boot/efi
+
+          # --- Tuning: kernel cmdline via GRUB drop-in ---
+          - name: "write-kernel-cmdline"
+            image: {{`{{.registry}}`}}/{{ $.Values.actionImages.writefile }}
+            timeout: 90
+            environment:
+              DEST_DISK: {{`{{.root_partition}}`}}
+              FS_TYPE: {{ $os.fsType }}
+              DEST_PATH: /etc/default/grub.d/99-tuning.cfg
+              DIRMODE: "0755"
+              CREATE_DIRS: "true"
+              UID: 0
+              GID: 0
+              MODE: 0644
+              CONTENTS: |
+                GRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX {{`{{.tuning_kernel_cmdline}}`}}"
+
+          - name: "update-grub-tuning"
+            image: {{`{{.registry}}`}}/{{ $.Values.actionImages.cexec }}
+            timeout: 90
+            environment:
+              BLOCK_DEVICE: {{`{{.root_partition}}`}}
+              FS_TYPE: {{ $os.fsType }}
+              CHROOT: "y"
+              DEFAULT_INTERPRETER: "/bin/sh -c"
+              CMD_LINE: |
+                mount {{`{{.efi_partition}}`}} /boot/efi
+                update-grub
+                umount /boot/efi
+
+          # --- Tuning: sysctl drop-in (applied at boot by systemd-sysctl) ---
+          - name: "write-sysctl-tuning"
+            image: {{`{{.registry}}`}}/{{ $.Values.actionImages.cexec }}
+            timeout: 90
+            environment:
+              BLOCK_DEVICE: {{`{{.root_partition}}`}}
+              FS_TYPE: {{ $os.fsType }}
+              CHROOT: "y"
+              DEFAULT_INTERPRETER: "/bin/sh -c"
+              CMD_LINE: |
+                SYSCTL_RAW='{{`{{.tuning_sysctl}}`}}'
+                if [ -n "$SYSCTL_RAW" ]; then
+                  echo "# Tuning profile sysctl" > /etc/sysctl.d/99-tuning.conf
+                  echo "$SYSCTL_RAW" | tr ';' '\n' >> /etc/sysctl.d/99-tuning.conf
+                fi
+
+          # --- OS: write fstab entries ---
+          - name: "write-fstab"
+            image: {{`{{.registry}}`}}/{{ $.Values.actionImages.writefile }}
+            timeout: 90
+            environment:
+              DEST_DISK: {{`{{.root_partition}}`}}
+              FS_TYPE: {{ $os.fsType }}
+              DEST_PATH: /etc/fstab
+              DIRMODE: "0755"
+              UID: 0
+              GID: 0
+              MODE: 0644
+              CONTENTS: |
+                PARTLABEL=root / {{ $os.fsType }} defaults 0 1
+                PARTLABEL=EFI /boot/efi vfat defaults 0 2
+
+          {{- if $os.rootSetup }}
+          {{- $_ := required (printf "osProfiles.%s.rootSetup.password is required" .osProfile) $os.rootSetup.password }}
+          # --- OS: root password + SSH ---
+          - name: "write-setup-script"
+            image: {{`{{.registry}}`}}/{{ $.Values.actionImages.writefile }}
+            timeout: 90
+            environment:
+              DEST_DISK: {{`{{.root_partition}}`}}
+              FS_TYPE: {{ $os.fsType }}
+              DEST_PATH: /tmp/setup.sh
+              DIRMODE: "0755"
+              CREATE_DIRS: "true"
+              UID: 0
+              GID: 0
+              MODE: 0755
+              CONTENTS: |
+                #!/bin/sh
+                echo root:{{ $os.rootSetup.password }} | chpasswd
+                {{- if $os.rootSetup.permitRootLogin }}
+                echo PermitRootLogin yes >> /etc/ssh/sshd_config
+                {{- end }}
+          - name: "run-setup-script"
+            image: {{`{{.registry}}`}}/{{ $.Values.actionImages.cexec }}
+            timeout: 90
+            environment:
+              BLOCK_DEVICE: {{`{{.root_partition}}`}}
+              FS_TYPE: {{ $os.fsType }}
+              CHROOT: "y"
+              CMD_LINE: /tmp/setup.sh
+          {{- end }}
+
+          # --- Network: wait-online fix ---
+          - name: "fix-networkd-wait"
+            image: {{`{{.registry}}`}}/{{ $.Values.actionImages.writefile }}
+            timeout: 90
+            environment:
+              DEST_DISK: {{`{{.root_partition}}`}}
+              FS_TYPE: {{ $os.fsType }}
+              DEST_PATH: /etc/systemd/system/systemd-networkd-wait-online.service.d/override.conf
+              DIRMODE: "0755"
+              CREATE_DIRS: "true"
+              UID: 0
+              GID: 0
+              MODE: 0644
+              CONTENTS: |
+                [Service]
+                ExecStart=
+                ExecStart=/usr/lib/systemd/systemd-networkd-wait-online --any
+
+          # --- Network: static IP ---
+          - name: "write-netplan"
+            image: {{`{{.registry}}`}}/{{ $.Values.actionImages.writefile }}
+            timeout: 90
+            environment:
+              DEST_DISK: {{`{{.root_partition}}`}}
+              FS_TYPE: {{ $os.fsType }}
+              DEST_PATH: /etc/netplan/99-static.yaml
+              DIRMODE: "0755"
+              CREATE_DIRS: "true"
+              UID: 0
+              GID: 0
+              MODE: 0600
+              CONTENTS: |
+                network:
+                  version: 2
+                  ethernets:
+                    all-en:
+                      match:
+                        name: "en*"
+                      addresses:
+                        - {{`{{.server_ip}}`}}/{{`{{.netmask_cidr}}`}}
+                      routes:
+                        - to: default
+                          via: {{`{{.gateway}}`}}
+                      nameservers:
+                        addresses: [{{`{{.dns_servers}}`}}]
+                      dhcp4: false
+                      dhcp6: false
+
+          # --- OS: cloud-init datasource (tootles) ---
+          - name: "write-cloud-init-datasource"
+            image: {{`{{.registry}}`}}/{{ $.Values.actionImages.writefile }}
+            timeout: 90
+            environment:
+              DEST_DISK: {{`{{.root_partition}}`}}
+              FS_TYPE: {{ $os.fsType }}
+              DEST_PATH: /etc/cloud/cloud.cfg.d/10-tinkerbell.cfg
+              DIRMODE: "0755"
+              CREATE_DIRS: "true"
+              UID: 0
+              GID: 0
+              MODE: 0600
+              CONTENTS: |
+                datasource:
+                  Ec2:
+                    metadata_urls: ["http://{{`{{.tootles_host}}`}}"]
+                    strict_id: false
+                manage_etc_hosts: localhost
+                warnings:
+                  dsid_missing_source: off
+          - name: "write-cloud-init-ds-identify"
+            image: {{`{{.registry}}`}}/{{ $.Values.actionImages.writefile }}
+            timeout: 90
+            environment:
+              DEST_DISK: {{`{{.root_partition}}`}}
+              FS_TYPE: {{ $os.fsType }}
+              DEST_PATH: /etc/cloud/ds-identify.cfg
+              DIRMODE: "0755"
+              CREATE_DIRS: "true"
+              UID: 0
+              GID: 0
+              MODE: 0600
+              CONTENTS: |
+                datasource: Ec2
+
+          # --- HW: boot into installed OS ---
+          {{- if eq (default "" $os.bootMode) "kexec" }}
+          - name: "kexec"
+            image: {{`{{.registry}}`}}/{{ $.Values.actionImages.kexec }}
+            timeout: 90
+            pid: host
+            environment:
+              BLOCK_DEVICE: {{`{{.root_partition}}`}}
+              FS_TYPE: {{ $os.fsType }}
+              KERNEL_PATH: {{`{{.kernel_path}}`}}
+              INITRD_PATH: {{`{{.initrd_path}}`}}
+              CMD_LINE: "root=PARTLABEL=root ro console=tty0 console=ttyS0"
+          {{- end }}
+          {{- /* If bootMode is not kexec, workflow completes and Tinkerbell reboots via BMC */ -}}
+{{- end }}
+{{- end }}

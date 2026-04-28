@@ -1,0 +1,20 @@
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDatasource
+metadata:
+  name: {{ .Values.clusterName }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: amg
+  datasource:
+    name: {{ .Values.clusterName }}
+    type: prometheus
+    access: proxy
+    url: https://aps-workspaces.{{ .Values.ampRegion }}.amazonaws.com/workspaces/{{ .Values.ampWorkspaceId }}
+    isDefault: false
+    jsonData:
+      httpMethod: POST
+      sigV4Auth: true
+      sigV4AuthType: default
+      sigV4Region: {{ .Values.ampRegion }}
+    editable: true

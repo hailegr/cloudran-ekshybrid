@@ -1,0 +1,659 @@
+{{- $clusterName := .Values.clusterName }}
+{{- $cluster := index .Values.workloadClusters $clusterName }}
+{{- $wlRegion := default .Values.aws.region (dig "aws" "region" "" $cluster) }}
+{{- $wlAccountId := default .Values.aws.accountId (dig "aws" "accountId" "" $cluster) }}
+{{- $wlVpcId := default .Values.aws.vpcId (dig "aws" "vpcId" "" $cluster) }}
+{{- $clusterARN := printf "arn:aws:eks:%s:%s:cluster/%s" $wlRegion $wlAccountId $clusterName }}
+{{- $tinkSubnets := default .Values.aws.subnets $cluster.tinkerbellSubnets }}
+{{- $wlRepoURL := default .Values.git.repoURL (dig "git" "repoURL" "" $cluster) }}
+{{- $wlBranch := default .Values.git.branch (dig "git" "branch" "" $cluster) }}
+---
+# cert-manager
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $clusterName }}-cert-manager
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  project: default
+  source:
+    repoURL: https://charts.jetstack.io
+    chart: cert-manager
+    targetRevision: v1.17.1
+    helm:
+      parameters:
+        - name: crds.enabled
+          value: "true"
+  destination:
+    server: {{ $clusterARN }}
+    namespace: cert-manager
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+---
+# Cilium CNI
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $clusterName }}-cilium-cni
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-8"
+spec:
+  project: default
+  sources:
+    - repoURL: oci://public.ecr.aws/eks/cilium/cilium
+      chart: cilium
+      targetRevision: "1.17.9-0"
+      helm:
+        valueFiles:
+          - $values/generic-platform-definitions/tinkerbell/cilium/values.yaml
+        values: |
+          ipam:
+            operator:
+              clusterPoolIPv4PodCIDRList:
+                - {{ default $.Values.hybridPodCIDR $cluster.hybridPodCIDR }}
+    - repoURL: {{ $wlRepoURL }}
+      targetRevision: {{ $wlBranch }}
+      ref: values
+  destination:
+    server: {{ $clusterARN }}
+    namespace: kube-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+---
+# AWS Load Balancer Controller
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $clusterName }}-aws-lbc
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-8"
+spec:
+  project: default
+  source:
+    repoURL: https://aws.github.io/eks-charts
+    chart: aws-load-balancer-controller
+    targetRevision: "1.17.1"
+    helm:
+      parameters:
+        - name: clusterName
+          value: {{ $clusterName }}
+        - name: serviceAccount.create
+          value: "true"
+        - name: serviceAccount.name
+          value: aws-load-balancer-controller
+        - name: region
+          value: {{ $wlRegion }}
+        - name: vpcId
+          value: {{ $wlVpcId }}
+        - name: nodeSelector.role
+          value: workload
+  destination:
+    server: {{ $clusterARN }}
+    namespace: kube-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Tinkerbell bare-metal RBAC
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $clusterName }}-tinkerbell-rbac
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-6"
+spec:
+  project: default
+  source:
+    repoURL: {{ $wlRepoURL }}
+    targetRevision: {{ $wlBranch }}
+    path: generic-platform-definitions/tinkerbell/bare-metal-rbac
+  destination:
+    server: {{ $clusterARN }}
+    namespace: tinkerbell
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Tinkerbell stack
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $clusterName }}-tinkerbell-stack
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  project: default
+  sources:
+    - repoURL: ghcr.io/tinkerbell/charts
+      chart: tinkerbell
+      targetRevision: "v0.22.1"
+      helm:
+        valueFiles:
+          - $values/generic-platform-definitions/tinkerbell/stack/values.yaml
+        values: |
+          service:
+            annotations:
+              service.beta.kubernetes.io/aws-load-balancer-type: external
+              service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+              service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: instance
+              service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+              service.beta.kubernetes.io/aws-load-balancer-subnets: {{ join "," $tinkSubnets }}
+          deployment:
+            envs:
+              smee:
+                dhcpEnabled: false
+                isoEnabled: true
+                isoStaticIPAMEnabled: false
+                isoUpstreamURL: "http://hookos.tinkerbell.svc:7173/hook-latest-lts-x86_64-efi-initrd.iso"
+                ipxeScriptTinkServerInsecureTLS: true
+          artifactsFileServer: "http://hookos.tinkerbell.svc:7173"
+    - repoURL: {{ $wlRepoURL }}
+      targetRevision: {{ $wlBranch }}
+      ref: values
+  destination:
+    server: {{ $clusterARN }}
+    namespace: tinkerbell
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: tinkerbell
+      jqPathExpressions:
+        - .spec.template.spec.containers[0].env[] | select(.name == "TINKERBELL_PUBLIC_IPV4")
+        - .spec.template.spec.containers[0].env[] | select(.name == "TINKERBELL_IPXE_SCRIPT_TINK_SERVER_ADDR_PORT")
+        - .spec.template.spec.containers[0].env[] | select(.name == "DOCKER_REGISTRY")
+        - .spec.template.spec.containers[0].env[] | select(.name == "TINKERBELL_IPXE_HTTP_SCRIPT_EXTRA_KERNEL_ARGS")
+        - .spec.template.spec.containers[0].env[] | select(.name == "TINKERBELL_IPXE_HTTP_SCRIPT_EXTRA_KERNEL_ARGS")
+        - .spec.template.spec.containers[0].env[] | select(.name == "TINKERBELL_IPXE_HTTP_SCRIPT_EXTRA_KERNEL_ARGS")
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
+---
+# Tinkerbell endpoint sync (PostSync job to resolve NLB IP)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $clusterName }}-tinkerbell-endpoint-sync
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+spec:
+  project: default
+  source:
+    repoURL: {{ $wlRepoURL }}
+    targetRevision: {{ $wlBranch }}
+    path: generic-platform-definitions/tinkerbell/stack-bootstrap
+  destination:
+    server: {{ $clusterARN }}
+    namespace: tinkerbell
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Action registry (local container registry)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $clusterName }}-action-registry
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+spec:
+  project: default
+  source:
+    repoURL: {{ $wlRepoURL }}
+    targetRevision: {{ $wlBranch }}
+    path: generic-platform-definitions/tinkerbell/registry
+    kustomize:
+      patches:
+        - target:
+            kind: Service
+            name: action-registry
+          patch: |
+            - op: add
+              path: /metadata/annotations/service.beta.kubernetes.io~1aws-load-balancer-subnets
+              value: {{ join "," $tinkSubnets }}
+  destination:
+    server: {{ $clusterARN }}
+    namespace: tinkerbell
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Image server config (bucket name for S3 sync)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: image-server-config
+  namespace: tinkerbell
+data:
+  imageBucket: {{ $.Values.imageBucket | default "" }}
+---
+# Action registry config (seed images for local registry)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: action-registry-config
+  namespace: tinkerbell
+data:
+  awsRegion: {{ $wlRegion }}
+  awsAccountId: "{{ $wlAccountId }}"
+  images: "{{ required "seedImages.tinkAgent is required" (dig "seedImages" "tinkAgent" "" $cluster) }} {{ required "seedImages.writefile is required" (dig "seedImages" "writefile" "" $cluster) }} {{ required "seedImages.cexec is required" (dig "seedImages" "cexec" "" $cluster) }} {{ required "seedImages.kexec is required" (dig "seedImages" "kexec" "" $cluster) }} {{ required "seedImages.diskTools is required" (dig "seedImages" "diskTools" "" $cluster) }}"
+---
+# Image server (OS archives via nginx)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $clusterName }}-image-server
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  project: default
+  source:
+    repoURL: {{ $wlRepoURL }}
+    targetRevision: {{ $wlBranch }}
+    path: generic-platform-definitions/tinkerbell/image-server
+    kustomize:
+      patches:
+        - target:
+            kind: Service
+            name: image-server
+          patch: |
+            - op: add
+              path: /metadata/annotations/service.beta.kubernetes.io~1aws-load-balancer-subnets
+              value: {{ join "," $tinkSubnets }}
+  destination:
+    server: {{ $clusterARN }}
+    namespace: tinkerbell
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Tinkerbell mTLS certificates
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $clusterName }}-tinkerbell-mtls
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: {{ $wlRepoURL }}
+    targetRevision: {{ $wlBranch }}
+    path: generic-platform-definitions/tinkerbell/mtls
+  destination:
+    server: {{ $clusterARN }}
+    namespace: tinkerbell
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# kro BareMetalServer RGD
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $clusterName }}-bare-metal-kro
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: {{ $wlRepoURL }}
+    targetRevision: {{ $wlBranch }}
+    path: generic-platform-definitions/tinkerbell/bare-metal-kro
+  destination:
+    server: {{ $clusterARN }}
+    namespace: tinkerbell
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Bare metal servers (ApplicationSet — one app per server group file)
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: {{ $clusterName }}-bare-metal
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          {{- range $cluster.serverGroups }}
+          - groupName: {{ . }}
+          {{- end }}
+  template:
+    metadata:
+      name: '{{ $clusterName }}-bare-metal-{{`{{groupName}}`}}'
+      annotations:
+        argocd.argoproj.io/sync-wave: "3"
+    spec:
+      project: default
+      sources:
+        - repoURL: {{ $wlRepoURL }}
+          targetRevision: {{ $wlBranch }}
+          path: generic-platform-definitions/tinkerbell/bare-metal
+          helm:
+            releaseName: '{{`{{groupName}}`}}'
+            valueFiles:
+              - $values/server-groups/{{ $clusterName }}/{{`{{groupName}}`}}.yaml
+        - repoURL: {{ $wlRepoURL }}
+          targetRevision: {{ $wlBranch }}
+          ref: values
+      destination:
+        server: {{ $clusterARN }}
+        namespace: tinkerbell
+      ignoreDifferences:
+        - group: kro.run
+          kind: BareMetalProvision
+          jsonPointers:
+            - /spec/tuningSysctl
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - RespectIgnoreDifferences=true
+---
+# Headless Service for telegraf metric discovery
+apiVersion: v1
+kind: Service
+metadata:
+  name: telegraf-metrics
+  namespace: kube-system
+  labels:
+    app: telegraf-metrics
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: telegraf
+  ports:
+    - name: metrics
+      port: 9273
+      targetPort: 9273
+---
+# ADOT Collector RBAC
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: adot-collector
+rules:
+  - apiGroups: [""]
+    resources: [nodes, nodes/proxy, nodes/metrics, services, endpoints, pods]
+    verbs: [get, list, watch]
+  - nonResourceURLs: [/metrics]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: adot-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: adot-collector
+subjects:
+  - kind: ServiceAccount
+    name: adot-collector
+    namespace: monitoring
+---
+# ADOT Collector — scrapes metrics and remote-writes to AMP
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $clusterName }}-adot-collector
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  project: default
+  source:
+    repoURL: https://open-telemetry.github.io/opentelemetry-helm-charts
+    chart: opentelemetry-collector
+    targetRevision: "0.152.0"
+    helm:
+      values: |
+        image:
+          repository: public.ecr.aws/aws-observability/aws-otel-collector
+          tag: v0.47.0
+        mode: deployment
+        replicaCount: 1
+        serviceAccount:
+          create: true
+          name: adot-collector
+        nodeSelector:
+          role: workload
+        config:
+          receivers:
+            prometheus:
+              config:
+                global:
+                  external_labels:
+                    cluster: {{ $clusterName }}
+                    region: {{ $wlRegion }}
+                scrape_configs:
+                  - job_name: telegraf
+                    scrape_interval: 30s
+                    kubernetes_sd_configs:
+                      - role: endpoints
+                        namespaces:
+                          names: [kube-system]
+                    relabel_configs:
+                      - source_labels: [__meta_kubernetes_service_name]
+                        regex: telegraf-metrics
+                        action: keep
+                      - source_labels: [__meta_kubernetes_endpoint_node_name]
+                        target_label: node
+                  - job_name: cadvisor
+                    scrape_interval: 30s
+                    scheme: https
+                    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+                    tls_config:
+                      insecure_skip_verify: true
+                    kubernetes_sd_configs:
+                      - role: node
+                    relabel_configs:
+                      - action: labelmap
+                        regex: __meta_kubernetes_node_label_(.+)
+                      - replacement: kubernetes.default.svc:443
+                        target_label: __address__
+                      - source_labels: [__meta_kubernetes_node_name]
+                        regex: (.+)
+                        target_label: __metrics_path__
+                        replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+                  - job_name: kubelet
+                    scrape_interval: 30s
+                    scheme: https
+                    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+                    tls_config:
+                      insecure_skip_verify: true
+                    kubernetes_sd_configs:
+                      - role: node
+                    relabel_configs:
+                      - action: labelmap
+                        regex: __meta_kubernetes_node_label_(.+)
+                      - replacement: kubernetes.default.svc:443
+                        target_label: __address__
+                      - source_labels: [__meta_kubernetes_node_name]
+                        regex: (.+)
+                        target_label: __metrics_path__
+                        replacement: /api/v1/nodes/$1/proxy/metrics
+                  - job_name: kube-apiserver
+                    scrape_interval: 30s
+                    scheme: https
+                    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+                    tls_config:
+                      insecure_skip_verify: true
+                    kubernetes_sd_configs:
+                      - role: endpoints
+                    relabel_configs:
+                      - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+                        regex: default;kubernetes;https
+                        action: keep
+          exporters:
+            prometheusremotewrite:
+              endpoint: https://aps-workspaces.{{ $wlRegion }}.amazonaws.com/workspaces/{{ $.Values.ampWorkspaceId }}/api/v1/remote_write
+              auth:
+                authenticator: sigv4auth
+          extensions:
+            health_check:
+              endpoint: 0.0.0.0:13133
+            sigv4auth:
+              region: {{ $wlRegion }}
+              service: aps
+          service:
+            extensions: [health_check, sigv4auth]
+            pipelines:
+              metrics:
+                receivers: [prometheus]
+                exporters: [prometheusremotewrite]
+  destination:
+    server: {{ $clusterARN }}
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+{{- if and $.Values.grafana $.Values.grafana.endpoint }}
+---
+# Grafana Operator — manages datasources and dashboards in AMG
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $clusterName }}-grafana-operator
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  project: default
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    chart: grafana-operator
+    targetRevision: "5.22.2"
+    helm:
+      parameters:
+        - name: nodeSelector.role
+          value: workload
+  destination:
+    server: {{ $clusterARN }}
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+---
+# Grafana Operator CRs — datasource and dashboards
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $clusterName }}-grafana-config
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+spec:
+  project: default
+  source:
+    repoURL: {{ $wlRepoURL }}
+    targetRevision: {{ $wlBranch }}
+    path: generic-platform-definitions/observability
+    helm:
+      parameters:
+        - name: grafanaEndpoint
+          value: {{ $.Values.grafana.endpoint }}
+        - name: clusterName
+          value: {{ $clusterName }}
+        - name: ampWorkspaceId
+          value: {{ $.Values.ampWorkspaceId | default "" }}
+        - name: ampRegion
+          value: {{ $wlRegion }}
+  destination:
+    server: {{ $clusterARN }}
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+{{- end }}
+---
+# CNF platform stack
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ $clusterName }}-platform
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  project: default
+  sources:
+    - repoURL: oci://public.ecr.aws/o8z7f9m8/awscse/aws-cse-eks-addons-hybrid-bundle
+      chart: aws-cse-eks-addons-hybrid-bundle
+      targetRevision: "0.0.4-alpha"
+      helm:
+        releaseName: platform
+        valueFiles:
+          - $values/generic-platform-definitions/platform-values/values.yaml
+    - repoURL: {{ $wlRepoURL }}
+      targetRevision: {{ $wlBranch }}
+      ref: values
+  destination:
+    server: {{ $clusterARN }}
+    namespace: kube-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

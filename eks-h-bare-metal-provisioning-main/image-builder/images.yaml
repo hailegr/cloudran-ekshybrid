@@ -1,0 +1,18 @@
+# Image build configurations
+# Pin cloud images and checksums here — source of truth for reproducible builds.
+
+images:
+  ubuntu24:
+    image_url: https://cloud-images.ubuntu.com/noble/20260323/noble-server-cloudimg-amd64.img
+    image_checksum: sha256:6e7016f2c9f4d3c00f48789eb6b9043ba2172ccc1b6b1eaf3ed1e29dd3e52bb3
+  # ubuntu22:
+  #   image_url: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+  #   image_checksum: sha256:...
+  # rhel9:
+  #   image_url: /path/to/rhel-9.4-x86_64-kvm.qcow2
+  #   image_checksum: sha256:...
+
+# nodeadm binary verification
+nodeadm:
+  base_url: https://hybrid-assets.eks.amazonaws.com/releases/latest/bin/linux
+  # TODO: pin nodeadm checksums per version once AWS publishes them

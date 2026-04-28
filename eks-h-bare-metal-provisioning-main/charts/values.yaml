@@ -1,0 +1,87 @@
+# Example site configuration — copy to values.yaml and fill in your values
+
+git:
+  repoURL:  "https://codeconnections.us-east-2.amazonaws.com/git-http/242201304709/us-east-2/a6d58f57-c24f-4395-9436-637ea5e4c46f/hailegr/cloudran-ekshybrid.git"
+  branch: main
+
+aws:
+  accountId: "833542146025"
+  region: us-west-1
+  vpcId: vpc-07e88daa42cfa2b79
+  subnets:
+    - subnet-0a3dc8360cbc8c799  # Private subnet us-west-1a (/19)
+    - subnet-036e83621d87f57b6  # Private subnet us-west-1c (/19)
+
+mgmtCluster:
+  name: useast-2-gitops-mgmt-v2
+  arn: arn:aws:eks:us-east-2:242201304709:cluster/useast-2-gitops-mgmt-v2
+  kroRoleSessionARN: arn:aws:iam::833542146025:role/eks-h-mgmt-cluster-CL-argocd-role
+  argoCDCapabilityRoleARN: arn:aws:iam::833542146025:role/eks-h-mgmt-cluster-CL-argocd-role
+
+argoCD:
+  idcInstanceARN: arn:aws:sso:::instance/ssoins-7223963920aa22a0
+  idcRegion: us-east-1
+  rbacRoleMappings:
+    - role: ADMIN
+      identities:
+        - id: 94685488-00c1-70a2-748a-bf13c212b6a3
+          type: SSO_USER
+
+accessEntries:
+  adminPrincipals:
+    - arn:aws:iam::833542146025:role/Bastion-Admin-Role
+
+bareMetalNetwork:
+  cidr: "192.168.31.0/24"
+
+hybridPodCIDR: "172.16.0.0/16"
+
+imageBucket: ""  # S3 bucket name from CDK ImageBuilderStack output (ImageBucketName).
+                 # The image-server sidecar syncs OS archives from this bucket every 5 minutes.
+                 # Build images with: aws codebuild start-build --project-name <CodeBuildProject>
+                 # Then set osProfiles.*.archive and archiveChecksum in bare-metal/values.yaml.
+                 # See image-builder/README.md for the full pipeline.
+
+nodegroup:
+  instanceTypes:
+    - m5.4xlarge
+  desiredSize: 2
+  minSize: 2
+  maxSize: 2
+
+workloadClusters:
+  workload-cluster-777:
+    serverGroups:         # list of group names (data in server-groups/<cluster>/<group>.yaml)
+      - site-group-777
+    # Per-cluster overrides (optional — defaults to global values above):
+    # aws:                              # cross-account / cross-region
+    #   region: us-east-1
+    #   accountId: "999888777666"
+    #   vpcId: vpc-0def456
+    #   subnets: [subnet-0ccc333, subnet-0ddd444]
+    # git:                              # per-account CodeConnection
+    #   repoURL: "https://..."
+    #   branch: main
+    # bareMetalNetworkCIDR: "10.0.31.0/24"
+    # hybridPodCIDR: "172.17.0.0/16"   # NOTE: not yet honored by Cilium — see USER-GUIDE.md §2
+    # actionImages:                     # private registry for action images
+    #   diskTools: 123456789012.dkr.ecr.us-west-2.amazonaws.com/disk-tools:v1
+    #   writefile: 123456789012.dkr.ecr.us-west-2.amazonaws.com/writefile:v1.0.0
+    #   cexec: 123456789012.dkr.ecr.us-west-2.amazonaws.com/cexec:v1.0.0
+    #   kexec: 123456789012.dkr.ecr.us-west-2.amazonaws.com/kexec:v1.0.0
+    # seedImages:                       # ECR sources for action-registry (pulled by skopeo)
+    #   - 123456789012.dkr.ecr.us-west-2.amazonaws.com/tink-agent:v0.22.1
+    #   - 123456789012.dkr.ecr.us-west-2.amazonaws.com/disk-tools:3.20
+    #   - 123456789012.dkr.ecr.us-west-2.amazonaws.com/writefile:v1.0.0
+    #   - 123456789012.dkr.ecr.us-west-2.amazonaws.com/cexec:v1.0.0
+    #   - 123456789012.dkr.ecr.us-west-2.amazonaws.com/kexec:v1.0.0
+    # nodegroup:
+    #   instanceTypes: [m5.2xlarge]
+    #   minSize: 3
+    #   maxSize: 3
+    #   desiredSize: 3
+
+# Grafana integration (optional — registers AMP as data source in Amazon Managed Grafana)
+# grafana:
+#   endpoint: "https://g-xxxxx.grafana-workspace.us-west-1.amazonaws.com"
+#   tokenSecret: "grafana-service-account-token"  # K8s Secret with key "token"

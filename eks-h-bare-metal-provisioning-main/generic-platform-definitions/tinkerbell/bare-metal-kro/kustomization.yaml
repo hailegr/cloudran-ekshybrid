@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - inventory-rgd.yaml
+  - provision-rgd.yaml
+  - deprovision-rgd.yaml
+configMapGenerator:
+  - name: bare-metal-scripts
+    namespace: tinkerbell
+    files:
+      - scripts/create-activation.sh
+      - scripts/drain-node.sh
+    options:
+      disableNameSuffixHash: true

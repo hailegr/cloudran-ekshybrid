@@ -1,0 +1,50 @@
+{{- range $clusterName, $cluster := .Values.workloadClusters }}
+{{- $bmCIDR := default $.Values.bareMetalNetwork.cidr $cluster.bareMetalNetworkCIDR }}
+{{- $podCIDR := default $.Values.hybridPodCIDR $cluster.hybridPodCIDR }}
+{{- $ng := default $.Values.nodegroup $cluster.nodegroup }}
+{{- $wlRegion := default $.Values.aws.region (dig "aws" "region" "" $cluster) }}
+{{- $wlAccountId := default $.Values.aws.accountId (dig "aws" "accountId" "" $cluster) }}
+{{- $wlVpcId := default $.Values.aws.vpcId (dig "aws" "vpcId" "" $cluster) }}
+{{- $wlSubnets := default $.Values.aws.subnets (dig "aws" "subnets" nil $cluster) }}
+---
+apiVersion: kro.run/v1alpha1
+kind: WorkloadCluster
+metadata:
+  name: {{ $clusterName }}
+  namespace: default
+spec:
+  clusterName: {{ $clusterName }}
+  region: {{ $wlRegion }}
+  accountId: "{{ $wlAccountId }}"
+  vpcId: {{ $wlVpcId }}
+  subnets:
+    {{- range $wlSubnets }}
+    - {{ . }}
+    {{- end }}
+  bareMetalNetworkCIDR: {{ $bmCIDR | quote }}
+  hybridPodCIDR: {{ $podCIDR | quote }}
+  mgmtArgoCDRoleARN: {{ $.Values.mgmtCluster.argoCDCapabilityRoleARN }}
+  idcInstanceARN: {{ $.Values.argoCD.idcInstanceARN }}
+  idcRegion: {{ $.Values.argoCD.idcRegion }}
+  rbacRoleMappings:
+    {{- range $.Values.argoCD.rbacRoleMappings }}
+    - role: {{ .role }}
+      identities:
+        {{- range .identities }}
+        - id: {{ .id }}
+          type: {{ .type }}
+        {{- end }}
+    {{- end }}
+  nodegroup:
+    instanceTypes:
+      {{- range $ng.instanceTypes }}
+      - {{ . }}
+      {{- end }}
+    minSize: {{ $ng.minSize }}
+    maxSize: {{ $ng.maxSize }}
+    desiredSize: {{ $ng.desiredSize }}
+  git:
+    repoURL: {{ default $.Values.git.repoURL (dig "git" "repoURL" "" $cluster) }}
+    branch: {{ default $.Values.git.branch (dig "git" "branch" "" $cluster) }}
+  imageBucket: {{ $.Values.imageBucket | default "" }}
+{{- end }}

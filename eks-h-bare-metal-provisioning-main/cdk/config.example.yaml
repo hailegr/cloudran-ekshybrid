@@ -1,0 +1,35 @@
+# Management cluster configuration
+# Copy to config.yaml and fill in your values: cp config.example.yaml config.yaml
+# Then deploy: cdk deploy
+
+# --- Required ---
+
+clusterName: ""                     # Name for the management EKS cluster (no dots — see KNOWN-ISSUES.md #1)
+vpcId: ""                           # Existing VPC ID (e.g. vpc-0abc123def456)
+subnetIds:                          # At least 2 subnets in the VPC
+  - ""                              # e.g. subnet-0aaa111
+  - ""                              # e.g. subnet-0bbb222
+idcInstanceARN: ""                  # IAM Identity Center instance ARN (arn:aws:sso:::instance/ssoins-...)
+
+# ArgoCD RBAC — maps IDC users/groups to ArgoCD roles
+# At least one ADMIN identity is required for ArgoCD access
+rbacRoleMappings:
+  - role: ADMIN
+    identities:
+      - id: ""                      # SSO user or group ID (UUID from IAM Identity Center)
+        type: SSO_USER              # SSO_USER or SSO_GROUP
+
+# --- Optional (have defaults) ---
+
+# region: us-west-2                 # AWS region (default: CDK_DEFAULT_REGION)
+# kubernetesVersion: "1.35"         # EKS version (default: 1.35)
+# idcRegion: us-east-1              # IAM Identity Center region (default: us-east-1)
+
+# --- Optional (no defaults) ---
+
+# Additional IAM roles/users to grant EKS cluster-admin access
+# accessEntries:
+#   - principalArn: arn:aws:iam::123456789012:role/MyAdminRole
+#     accessPolicy: AmazonEKSClusterAdminPolicy
+#   - principalArn: arn:aws:iam::123456789012:user/myuser
+#     accessPolicy: AmazonEKSClusterAdminPolicy

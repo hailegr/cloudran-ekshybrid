@@ -1,0 +1,122 @@
+# Nginx-based image server for serving OS archives to bare metal nodes.
+# Sidecar syncs archives from S3 every 5 minutes; nginx serves them via internal NLB.
+# StatefulSet gives each replica its own PVC so they can run on separate nodes.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: image-server
+  namespace: tinkerbell
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: image-server
+  namespace: tinkerbell
+spec:
+  serviceName: image-server-headless
+  replicas: 2
+  selector:
+    matchLabels:
+      app: image-server
+  template:
+    metadata:
+      labels:
+        app: image-server
+    spec:
+      serviceAccountName: image-server
+      nodeSelector:
+        role: workload
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: image-server
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: s3-sync
+          image: amazon/aws-cli:2.27.31
+          command:
+            - bash
+            - -c
+            - |
+              while true; do
+                echo "[$(date)] Syncing from s3://${IMAGE_BUCKET}/images/..."
+                aws s3 sync "s3://${IMAGE_BUCKET}/images/" /images/ \
+                  --exclude "*" --include "*.tar.gz" --include "*.sha256" \
+                  --no-progress
+                ls -lh /images/
+                sleep 300
+              done
+          env:
+            - name: IMAGE_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: image-server-config
+                  key: imageBucket
+          volumeMounts:
+            - name: images
+              mountPath: /images
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: images
+              mountPath: /usr/share/nginx/html
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: images
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: gp2
+        resources:
+          requests:
+            storage: 10Gi
+---
+# Headless service required by StatefulSet
+apiVersion: v1
+kind: Service
+metadata:
+  name: image-server-headless
+  namespace: tinkerbell
+spec:
+  clusterIP: None
+  selector:
+    app: image-server
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: image-server
+  namespace: tinkerbell
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: external
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: instance
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+spec:
+  type: LoadBalancer
+  selector:
+    app: image-server
+  ports:
+    - port: 80
+      targetPort: 80

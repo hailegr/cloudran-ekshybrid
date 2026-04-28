@@ -1,0 +1,204 @@
+# ResourceGraphDefinition: BareMetalProvision
+#
+# Provisioning lifecycle — only created when provision=true.
+# When the Helm template stops emitting this CR, ArgoCD prunes it,
+# kro deletes the Workflow (and its Rufio preparing Job), SSM Job, etc.
+#
+# Dependency graph:
+#   endpoints (externalRef, readyWhen: LB IPs present)
+#   ssmJob (creates activation, writes ConfigMap, readyWhen: succeeded)
+#       │
+#       ├── ssmData (externalRef to ConfigMap, readyWhen: userData present)
+#       │
+#       └── workflow (created last — references endpoints + ssmData + hardware externalRef)
+#
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: bare-metal-provision
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: BareMetalProvision
+    spec:
+      name: string
+      mac: string
+      ip: string
+      machineProfile: string
+      osProfile: string
+      destDisk: string
+      efiPartition: string
+      rootPartition: string
+      kernelPath: string
+      initrdPath: string
+      osArchive: string
+      osArchiveType: string | default="targz"
+      osArchiveChecksum: string | default=""
+      osFsType: string | default="ext4"
+      gateway: string
+      netmaskCIDR: string
+      dnsServers: string
+      serverGroup: string
+      namespace: string
+      provisionHash: string | default="v1"
+      clusterName: string
+      clusterRegion: string
+      hybridNodesRole: string
+      tuningKernelCmdline: string | default=""
+      tuningSysctl: string | default=""
+      tuningDisabledServices: string | default=""
+    status:
+      workflowName: ${workflow.metadata.name}
+      workflowState: ${workflow.status.?state.orValue("PENDING")}
+      ssmJobStatus: '${ssmJob.status.?succeeded.orValue(0) > 0 ? "Complete" : "Running"}'
+      endpointsReady: ${endpoints.data.?tinkerbellIP.orValue("") != ""}
+
+  resources:
+    - id: ssmJob
+      template:
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          name: ${schema.spec.name + "-ssm-" + schema.spec.provisionHash}
+          namespace: ${schema.spec.namespace}
+          labels:
+            server-group: ${schema.spec.serverGroup}
+        spec:
+          backoffLimit: 3
+          ttlSecondsAfterFinished: 3600
+          template:
+            spec:
+              serviceAccountName: ssm-activation-creator
+              restartPolicy: OnFailure
+              affinity:
+                nodeAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    nodeSelectorTerms:
+                      - matchExpressions:
+                          - key: eks.amazonaws.com/compute-type
+                            operator: DoesNotExist
+              containers:
+                - name: create-activation
+                  image: amazon/aws-cli:2.27.63
+                  command: ["/bin/bash", "/scripts/create-activation.sh"]
+                  env:
+                    - name: MACHINE_NAME
+                      value: ${schema.spec.name}
+                    - name: NAMESPACE
+                      value: ${schema.spec.namespace}
+                    - name: ROLE_NAME
+                      value: ${schema.spec.hybridNodesRole}
+                    - name: CLUSTER_NAME
+                      value: ${schema.spec.clusterName}
+                    - name: CLUSTER_REGION
+                      value: ${schema.spec.clusterRegion}
+                    - name: TUNING_SYSCTL
+                      value: ${schema.spec.tuningSysctl}
+                    - name: TUNING_DISABLED_SERVICES
+                      value: ${schema.spec.tuningDisabledServices}
+                    - name: MACHINE_PROFILE
+                      value: ${schema.spec.machineProfile}
+                  volumeMounts:
+                    - name: scripts
+                      mountPath: /scripts
+                      readOnly: true
+              volumes:
+                - name: scripts
+                  configMap:
+                    name: bare-metal-scripts
+                    defaultMode: 0755
+      readyWhen:
+        - ${ssmJob.status.?succeeded.orValue(0) > 0}
+
+    - id: endpoints
+      externalRef:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: tinkerbell-endpoints
+          namespace: ${schema.spec.namespace}
+      readyWhen:
+        - ${endpoints.data.?tinkerbellIP.orValue("") != ""}
+        - ${endpoints.data.?imageServerIP.orValue("") != ""}
+
+    - id: ssmData
+      externalRef:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: ${schema.spec.name + "-ssm"}
+          namespace: ${schema.spec.namespace}
+      readyWhen:
+        - ${ssmData.data.?userData.orValue("") != ""}
+
+    # Hardware — externalRef to the Hardware created by BareMetalInventory.
+    # The Workflow needs hardwareRef; this creates the DAG edge.
+    - id: hardware
+      externalRef:
+        apiVersion: tinkerbell.org/v1alpha1
+        kind: Hardware
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+      readyWhen:
+        - ${hardware.metadata.?name.orValue("") != ""}
+
+    - id: workflow
+      template:
+        apiVersion: tinkerbell.org/v1alpha1
+        kind: Workflow
+        metadata:
+          name: ${"provision-" + schema.spec.name + "-" + schema.spec.provisionHash}
+          namespace: ${schema.spec.namespace}
+          labels:
+            hardware: ${hardware.metadata.name}
+            server-group: ${schema.spec.serverGroup}
+        spec:
+          templateRef: ${schema.spec.machineProfile + "-" + schema.spec.osProfile}
+          hardwareRef: ${hardware.metadata.name}
+          hardwareMap:
+            device_1: ${schema.spec.mac}
+            machine_name: ${schema.spec.name}
+            dest_disk: ${schema.spec.destDisk}
+            efi_partition: ${schema.spec.efiPartition}
+            root_partition: ${schema.spec.rootPartition}
+            kernel_path: ${schema.spec.kernelPath}
+            initrd_path: ${schema.spec.initrdPath}
+            server_ip: ${schema.spec.ip}
+            gateway: ${schema.spec.gateway}
+            netmask_cidr: ${schema.spec.netmaskCIDR}
+            dns_servers: ${schema.spec.dnsServers}
+            archive_url: ${"http://" + endpoints.data.?imageServerIP.orValue("") + ":80/" + schema.spec.osArchive}
+            registry: ${endpoints.data.?registryIP.orValue("") + ":5000"}
+            archive_type: ${schema.spec.osArchiveType}
+            archive_checksum: ${schema.spec.osArchiveChecksum}
+            fs_type: ${schema.spec.osFsType}
+            tootles_host: ${endpoints.data.?tinkerbellIP.orValue("") + ":7172"}
+            tuning_kernel_cmdline: ${schema.spec.tuningKernelCmdline}
+            tuning_sysctl: ${schema.spec.tuningSysctl}
+            tuning_disabled_services: ${schema.spec.tuningDisabledServices}
+          bootOptions:
+            bootMode: customboot
+            custombootConfig:
+              preparingActions:
+                - powerAction: "off"
+                - virtualMediaAction:
+                    kind: CD
+                - virtualMediaAction:
+                    kind: CD
+                    mediaURL: ${"http://" + endpoints.data.?tinkerbellIP.orValue("") + ":7171/iso/" + schema.spec.mac + "/hook.iso"}
+                - bootDevice:
+                    device: "cdrom"
+                    efiBoot: true
+                - powerAction: "on"
+              postActions:
+                - powerAction: "off"
+                - virtualMediaAction:
+                    kind: CD
+                - bootDevice:
+                    device: "disk"
+                    persistent: true
+                    efiBoot: true
+                - powerAction: "on"
+      readyWhen:
+        - ${workflow.status.?state.orValue("") == "SUCCESS"}

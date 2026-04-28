@@ -1,0 +1,86 @@
+# Register the management cluster in its own ArgoCD
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cluster-local
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: cluster
+stringData:
+  name: {{ .Values.mgmtCluster.name }}
+  server: {{ .Values.mgmtCluster.arn }}
+  project: default
+---
+# WorkloadCluster kro RGD — must exist before WorkloadCluster instances
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: workload-cluster-kro
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: {{ .Values.git.repoURL }}
+    targetRevision: {{ .Values.git.branch }}
+    path: generic-platform-definitions/infrastructure/workload-cluster-kro
+  destination:
+    server: {{ .Values.mgmtCluster.arn }}
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+---
+# Grant kro access to argocd namespace (for cluster registration Secrets and bootstrap Apps)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kro-argocd-access
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kro-argocd-access
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kro-argocd-access
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: {{ .Values.mgmtCluster.kroRoleSessionARN }}
+---
+# Root app — manages workload cluster CRs
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: eks-h-bare-metal
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    - repoURL: {{ .Values.git.repoURL }}
+      targetRevision: {{ .Values.git.branch }}
+      path: charts/mgmt-workload-clusters
+      helm:
+        valueFiles:
+          - $values/values.yaml
+    - repoURL: {{ .Values.git.repoURL }}
+      targetRevision: {{ .Values.git.branch }}
+      ref: values
+  destination:
+    server: {{ .Values.mgmtCluster.arn }}
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

@@ -1,0 +1,120 @@
+{
+  "title": "Workload Cluster Overview",
+  "tags": ["eks-h", "workload"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Data Source"
+      },
+      {
+        "name": "cluster",
+        "type": "query",
+        "query": "label_values(up, cluster)",
+        "datasource": {"type": "prometheus", "uid": "${datasource}"},
+        "current": {"text": "All", "value": "$__all"},
+        "includeAll": true,
+        "allValue": ".*",
+        "refresh": 2,
+        "label": "Cluster"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Nodes",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "count(kubelet_node_name{cluster=~\"$cluster\"})", "legendFormat": "Nodes"}],
+      "fieldConfig": {"defaults": {"thresholds": {"steps": [{"color": "green", "value": null}]}}}
+    },
+    {
+      "id": 2,
+      "title": "Running Pods",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "sum(kubelet_running_pods{cluster=~\"$cluster\"})", "legendFormat": "Pods"}],
+      "fieldConfig": {"defaults": {"thresholds": {"steps": [{"color": "green", "value": null}]}}}
+    },
+    {
+      "id": 3,
+      "title": "CPU Cores",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "sum(machine_cpu_cores{cluster=~\"$cluster\"})", "legendFormat": "Cores"}],
+      "fieldConfig": {"defaults": {"thresholds": {"steps": [{"color": "green", "value": null}]}}}
+    },
+    {
+      "id": 4,
+      "title": "Memory",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "sum(machine_memory_bytes{cluster=~\"$cluster\"}) / 1024 / 1024 / 1024", "legendFormat": "GB"}],
+      "fieldConfig": {"defaults": {"unit": "decgbytes", "thresholds": {"steps": [{"color": "green", "value": null}]}}}
+    },
+    {
+      "id": 5,
+      "title": "Scrape Targets",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "count(up{cluster=~\"$cluster\"})", "legendFormat": "Targets"}],
+      "fieldConfig": {"defaults": {"thresholds": {"steps": [{"color": "green", "value": null}]}}}
+    },
+    {
+      "id": 6,
+      "title": "Up/Down Targets",
+      "type": "stat",
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "sum(up{cluster=~\"$cluster\"} == 0)", "legendFormat": "Down"}],
+      "fieldConfig": {"defaults": {"thresholds": {"steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}}
+    },
+    {
+      "id": 7,
+      "title": "CPU Usage by Node",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "sum by (instance) (rate(container_cpu_usage_seconds_total{cluster=~\"$cluster\", container!=\"\"}[5m]))", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "short"}}
+    },
+    {
+      "id": 8,
+      "title": "Memory Usage by Node",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "sum by (instance) (container_memory_working_set_bytes{cluster=~\"$cluster\", container!=\"\"})", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "bytes"}}
+    },
+    {
+      "id": 9,
+      "title": "API Server Request Rate",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "sum by (code) (rate(apiserver_request_total{cluster=~\"$cluster\"}[5m]))", "legendFormat": "{{code}}"}],
+      "fieldConfig": {"defaults": {"unit": "reqps"}}
+    },
+    {
+      "id": 10,
+      "title": "Running Pods per Node",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "targets": [{"expr": "kubelet_running_pods{cluster=~\"$cluster\"}", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"unit": "short"}}
+    }
+  ]
+}

@@ -1,0 +1,133 @@
+# ResourceGraphDefinition: BareMetalInventory
+#
+# Permanent server identity — exists for every server regardless of
+# provisioning state. Manages BMC credentials, Machine, and Hardware.
+#
+# Dependency graph:
+#   bmcSecret ──► machine ──► hardware
+#
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: bare-metal-inventory
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: BareMetalInventory
+    spec:
+      name: string
+      mac: string
+      ip: string
+      bmcAddress: string
+      bmcUser: string
+      bmcPass: string
+      machineProfile: string
+      osProfile: string
+      destDisk: string
+      efiPartition: string
+      rootPartition: string
+      osFsType: string | default="ext4"
+      gateway: string
+      netmask: string
+      dnsServers: string | default=""
+      serverGroup: string
+      namespace: string
+    status:
+      hardwareName: ${hardware.metadata.name}
+      machineName: ${machine.metadata.name}
+
+  resources:
+    - id: bmcSecret
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${schema.spec.name + "-bmc"}
+          namespace: ${schema.spec.namespace}
+          labels:
+            server-group: ${schema.spec.serverGroup}
+        type: Opaque
+        stringData:
+          username: ${schema.spec.bmcUser}
+          password: ${schema.spec.bmcPass}
+
+    - id: machine
+      template:
+        apiVersion: bmc.tinkerbell.org/v1alpha1
+        kind: Machine
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+          labels:
+            server-group: ${schema.spec.serverGroup}
+        spec:
+          connection:
+            host: ${schema.spec.bmcAddress}
+            port: 443
+            authSecretRef:
+              name: ${bmcSecret.metadata.name}
+              namespace: ${schema.spec.namespace}
+            insecureTLS: true
+
+    - id: hardware
+      template:
+        apiVersion: tinkerbell.org/v1alpha1
+        kind: Hardware
+        metadata:
+          name: ${schema.spec.name}
+          namespace: ${schema.spec.namespace}
+          labels:
+            server-group: ${schema.spec.serverGroup}
+            machine-profile: ${schema.spec.machineProfile}
+            os-profile: ${schema.spec.osProfile}
+        spec:
+          bmcRef:
+            apiGroup: bmc.tinkerbell.org
+            kind: Machine
+            name: ${machine.metadata.name}
+          disks:
+            - device: ${schema.spec.destDisk}
+          interfaces:
+            - dhcp:
+                arch: x86_64
+                hostname: ${schema.spec.name}
+                ip:
+                  address: ${schema.spec.ip}
+                  gateway: ${schema.spec.gateway}
+                  netmask: ${schema.spec.netmask}
+                mac: ${schema.spec.mac}
+                name_servers: ${schema.spec.dnsServers.split(",")}
+                uefi: true
+              netboot:
+                allowPXE: false
+                allowWorkflow: true
+          metadata:
+            facility:
+              facility_code: ${schema.spec.serverGroup}
+            instance:
+              hostname: ${schema.spec.name}
+              id: ${schema.spec.name}
+              storage:
+                disks:
+                  - device: ${schema.spec.destDisk}
+                    partitions:
+                      - label: EFI
+                        number: 1
+                        size: 512
+                      - label: ROOT
+                        number: 2
+                        size: 0
+                    wipe_table: true
+                filesystems:
+                  - mount:
+                      create:
+                        options: ["-F", "32"]
+                      device: ${schema.spec.efiPartition}
+                      format: vfat
+                      point: /boot/efi
+                  - mount:
+                      create:
+                        options: ["-F"]
+                      device: ${schema.spec.rootPartition}
+                      format: ${schema.spec.osFsType}
+                      point: /

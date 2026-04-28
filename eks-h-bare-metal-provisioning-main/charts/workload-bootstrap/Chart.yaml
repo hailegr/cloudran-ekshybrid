@@ -1,0 +1,4 @@
+apiVersion: v2
+name: workload-bootstrap
+description: Bootstrap a workload cluster's ArgoCD — deployed by kro bootstrapApp
+version: 0.1.0

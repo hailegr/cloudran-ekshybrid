@@ -1,0 +1,4 @@
+apiVersion: v2
+name: mgmt-workload-clusters
+description: WorkloadCluster CRs and admin AccessEntries — managed by mgmt ArgoCD
+version: 0.1.0

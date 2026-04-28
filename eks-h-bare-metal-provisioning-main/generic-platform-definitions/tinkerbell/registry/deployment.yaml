@@ -1,0 +1,137 @@
+# Local container registry for serving action images to HookOS (no internet access).
+# Init container pulls action images from quay.io and pushes to local registry.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: action-registry
+  namespace: tinkerbell
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: action-registry
+  template:
+    metadata:
+      labels:
+        app: action-registry
+    spec:
+      nodeSelector:
+        role: workload
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: action-registry
+                topologyKey: kubernetes.io/hostname
+      initContainers:
+        - name: ecr-login
+          image: amazon/aws-cli:latest
+          command: ["sh", "-c"]
+          args:
+            - |
+              REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+              TOKEN=$(aws ecr get-authorization-token --region "$AWS_REGION" --query 'authorizationData[0].authorizationToken' --output text)
+              mkdir -p /auth
+              printf '{"auths":{"%s":{"auth":"%s"}}}' "$REGISTRY" "$TOKEN" > /auth/config.json
+              echo "ECR auth configured for $REGISTRY"
+          env:
+            - name: AWS_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: action-registry-config
+                  key: awsRegion
+            - name: AWS_ACCOUNT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: action-registry-config
+                  key: awsAccountId
+          volumeMounts:
+            - name: docker-config
+              mountPath: /auth
+      containers:
+        - name: seed-images
+          image: quay.io/skopeo/stable:latest
+          command:
+            - sh
+            - -c
+            - |
+              REGISTRY="localhost:5000"
+              export REGISTRY_AUTH_FILE=/auth/config.json
+
+              # Wait for registry container to be ready
+              echo "Waiting for registry at $REGISTRY..."
+              for i in $(seq 1 30); do
+                if curl -sf "http://$REGISTRY/v2/" >/dev/null 2>&1; then
+                  echo "Registry ready"
+                  break
+                fi
+                sleep 2
+              done
+
+              FAILED=0
+              for img in $SEED_IMAGES; do
+                name=$(echo $img | sed 's|.*/||')
+                dst="docker://$REGISTRY/$name"
+                echo "Copying $img -> $dst"
+                if ! skopeo copy "docker://$img" "$dst" --dest-tls-verify=false; then
+                  echo "ERROR: failed to copy $img"
+                  FAILED=$((FAILED + 1))
+                fi
+              done
+
+              if [ "$FAILED" -gt 0 ]; then
+                echo "$FAILED image(s) failed to seed"
+                exit 1
+              fi
+              echo "All images seeded"
+              sleep infinity
+          volumeMounts:
+            - name: docker-config
+              mountPath: /auth
+              readOnly: true
+          env:
+            - name: SEED_IMAGES
+              valueFrom:
+                configMapKeyRef:
+                  name: action-registry-config
+                  key: images
+        - name: registry
+          image: registry:2
+          ports:
+            - containerPort: 5000
+          volumeMounts:
+            - name: registry-data
+              mountPath: /var/lib/registry
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: registry-data
+          emptyDir: {}
+        - name: docker-config
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: action-registry
+  namespace: tinkerbell
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: external
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: instance
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+spec:
+  type: LoadBalancer
+  selector:
+    app: action-registry
+  ports:
+    - port: 5000
+      targetPort: 5000

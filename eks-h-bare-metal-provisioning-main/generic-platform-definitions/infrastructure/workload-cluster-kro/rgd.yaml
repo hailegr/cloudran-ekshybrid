@@ -1,0 +1,920 @@
+# ResourceGraphDefinition: WorkloadCluster
+#
+# Manages the full lifecycle of an EKS workload cluster for bare metal
+# provisioning. kro's DAG ensures proper ordering — no sync waves needed.
+#
+# Creation order (kro DAG, bottom-up):
+#   IAM Roles (8x), SecurityGroup, LaunchTemplate — no dependencies
+#       │
+#       └── EKS Cluster (readyWhen: ACTIVE)
+#               │
+#               ├── Addons (vpc-cni, pod-identity-agent, ebs-csi)
+#               ├── Nodegroup
+#               ├── WorkloadArgoCDAccess (before capability — cluster + role only)
+#               ├── Capabilities (ArgoCD, ACK, kro)
+#               │       │ readyWhen: ACTIVE
+#               │       │
+#               │       ├── AccessEntries (argocd, hybrid-nodes)
+#               │       ├── PodIdentityAssociations (ssm, lbc)
+#               │       └── Cluster registration Secret + Bootstrap App
+#               │               │
+#               │               └── Bootstrap App (waits for Secret + AccessEntry)
+#               │
+#               └── Admin AccessEntries
+#
+# Deletion order (reverse DAG):
+#   1. bootstrapApp, clusterSecret — leaf nodes deleted first
+#   2. AccessEntries, PodIdentityAssociations
+#   3. Capabilities (deletePropagationPolicy: RETAIN) — ArgoCD/ACK/kro
+#      installations are kept on the workload cluster (DELETE not yet
+#      supported by EKS API). Manual cleanup may be needed.
+#   4. Addons, Nodegroup
+#   5. EKS Cluster
+#   6. IAM Roles, SecurityGroup, LaunchTemplate
+#
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: workload-cluster
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: WorkloadCluster
+    spec:
+      clusterName: string
+      region: string
+      accountId: string
+      vpcId: string
+      subnets: "[]string"
+      bareMetalNetworkCIDR: string
+      hybridPodCIDR: string
+      mgmtArgoCDRoleARN: string
+      idcInstanceARN: string
+      idcRegion: string | default="us-east-1"
+      rbacRoleMappings: "[]object"
+      nodegroup:
+        instanceTypes: "[]string"
+        minSize: integer | default=2
+        maxSize: integer | default=2
+        desiredSize: integer | default=2
+      git:
+        repoURL: string
+        branch: string | default="main"
+      imageBucket: string | default=""
+    status:
+      # Cluster
+      clusterARN: ${cluster.status.ackResourceMetadata.arn}
+      clusterStatus: ${cluster.status.status}
+      # Nodegroup
+      nodegroupStatus: ${nodegroup.status.status}
+      # Addons
+      vpcCniStatus: ${vpcCniAddon.status.status}
+      podIdentityAgentStatus: ${podIdentityAddon.status.status}
+      ebsCsiStatus: ${ebsCsiAddon.status.status}
+      # Capabilities
+      argoCDCapabilityStatus: ${argoCDCapability.status.status}
+      ackCapabilityStatus: ${ackCapability.status.status}
+      kroCapabilityStatus: ${kroCapability.status.status}
+      # AMP
+      ampWorkspaceID: ${ampWorkspace.status.workspaceID}
+
+  resources:
+    # ── IAM Roles (no dependencies) ──
+
+    - id: clusterRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.clusterName + "-cluster-role"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          name: ${schema.spec.clusterName + "-cluster-role"}
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": "eks.amazonaws.com" },
+                "Action": ["sts:AssumeRole", "sts:TagSession"]
+              }]
+            }
+          policies:
+            - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+          tags:
+            - key: managed-by
+              value: ack
+            - key: cluster
+              value: ${schema.spec.clusterName}
+      readyWhen:
+        - ${clusterRole.status.ackResourceMetadata.arn != ""}
+
+    - id: nodegroupRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.clusterName + "-nodegroup-role"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          name: ${schema.spec.clusterName + "-nodegroup-role"}
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": "ec2.amazonaws.com" },
+                "Action": "sts:AssumeRole"
+              }]
+            }
+          policies:
+            - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+            - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+            - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+          tags:
+            - key: managed-by
+              value: ack
+            - key: cluster
+              value: ${schema.spec.clusterName}
+      readyWhen:
+        - ${nodegroupRole.status.ackResourceMetadata.arn != ""}
+
+    - id: ebsCsiRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.clusterName + "-ebs-csi-role"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          name: ${schema.spec.clusterName + "-ebs-csi-role"}
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": "pods.eks.amazonaws.com" },
+                "Action": ["sts:AssumeRole", "sts:TagSession"]
+              }]
+            }
+          policies:
+            - arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy
+          tags:
+            - key: managed-by
+              value: ack
+      readyWhen:
+        - ${ebsCsiRole.status.ackResourceMetadata.arn != ""}
+
+    - id: hybridNodesRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.clusterName + "-hybrid-nodes-role"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          name: ${schema.spec.clusterName + "-hybrid-nodes-role"}
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": "ssm.amazonaws.com" },
+                "Action": "sts:AssumeRole"
+              }]
+            }
+          policies:
+            - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+            - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly
+            - arn:aws:iam::aws:policy/AmazonEKSWorkerNodeMinimalPolicy
+          inlinePolicies:
+            EKSDescribeCluster: |
+              {
+                "Version": "2012-10-17",
+                "Statement": [{
+                  "Effect": "Allow",
+                  "Action": ["eks:DescribeCluster", "eks:ListAccessEntries"],
+                  "Resource": "*"
+                }]
+              }
+          tags:
+            - key: managed-by
+              value: ack
+            - key: cluster
+              value: ${schema.spec.clusterName}
+      readyWhen:
+        - ${hybridNodesRole.status.ackResourceMetadata.arn != ""}
+
+    - id: ssmJobRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.clusterName + "-ssm-job-role"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          name: ${schema.spec.clusterName + "-ssm-job-role"}
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": "pods.eks.amazonaws.com" },
+                "Action": ["sts:AssumeRole", "sts:TagSession"]
+              }]
+            }
+          policies:
+            - arn:aws:iam::aws:policy/AmazonSSMFullAccess
+            - arn:aws:iam::aws:policy/IAMReadOnlyAccess
+          inlinePolicies:
+            PassHybridNodesRole: |
+              {
+                "Version": "2012-10-17",
+                "Statement": [{
+                  "Effect": "Allow",
+                  "Action": "iam:PassRole",
+                  "Resource": ${"\"arn:aws:iam::" + schema.spec.accountId + ":role/*-hybrid-nodes-role\""}
+                }]
+              }
+          tags:
+            - key: managed-by
+              value: ack
+      readyWhen:
+        - ${ssmJobRole.status.ackResourceMetadata.arn != ""}
+
+    - id: lbcRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.clusterName + "-aws-lbc-role"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          name: ${schema.spec.clusterName + "-aws-lbc-role"}
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": "pods.eks.amazonaws.com" },
+                "Action": ["sts:AssumeRole", "sts:TagSession"]
+              }]
+            }
+          policies:
+            - arn:aws:iam::aws:policy/ElasticLoadBalancingFullAccess
+          inlinePolicies:
+            AWSLoadBalancerController: |
+              {
+                "Version": "2012-10-17",
+                "Statement": [{
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:DescribeAccountAttributes", "ec2:DescribeAddresses",
+                    "ec2:DescribeAvailabilityZones", "ec2:DescribeInternetGateways",
+                    "ec2:DescribeVpcs", "ec2:DescribeVpcPeeringConnections",
+                    "ec2:DescribeSubnets", "ec2:DescribeSecurityGroups",
+                    "ec2:DescribeInstances", "ec2:DescribeNetworkInterfaces",
+                    "ec2:DescribeTags", "ec2:DescribeCoipPools",
+                    "ec2:GetCoipPoolUsage", "ec2:CreateSecurityGroup",
+                    "ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress",
+                    "ec2:DeleteSecurityGroup", "ec2:CreateTags", "ec2:DeleteTags",
+                    "iam:CreateServiceLinkedRole",
+                    "cognito-idp:DescribeUserPoolClient",
+                    "acm:ListCertificates", "acm:DescribeCertificate",
+                    "waf-regional:GetWebACL", "waf-regional:GetWebACLForResource",
+                    "waf-regional:AssociateWebACL", "waf-regional:DisassociateWebACL",
+                    "wafv2:GetWebACL", "wafv2:GetWebACLForResource",
+                    "wafv2:AssociateWebACL", "wafv2:DisassociateWebACL",
+                    "shield:GetSubscriptionState", "shield:DescribeProtection",
+                    "shield:CreateProtection", "shield:DeleteProtection"
+                  ],
+                  "Resource": "*"
+                }]
+              }
+          tags:
+            - key: managed-by
+              value: ack
+      readyWhen:
+        - ${lbcRole.status.ackResourceMetadata.arn != ""}
+
+    - id: argoCDCapabilityRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.clusterName + "-argocd-capability-role"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          name: ${schema.spec.clusterName + "-argocd-capability-role"}
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": "capabilities.eks.amazonaws.com" },
+                "Action": ["sts:AssumeRole", "sts:TagSession"]
+              }]
+            }
+          policies:
+            - arn:aws:iam::aws:policy/AWSCodeCommitReadOnly
+            - arn:aws:iam::aws:policy/AWSSecretsManagerClientReadOnlyAccess
+          inlinePolicies:
+            SSODescribeInstance: |
+              {
+                "Version": "2012-10-17",
+                "Statement": [{
+                  "Effect": "Allow",
+                  "Action": "sso:DescribeInstance",
+                  "Resource": "*"
+                }]
+              }
+          tags:
+            - key: managed-by
+              value: ack
+            - key: cluster
+              value: ${schema.spec.clusterName}
+      readyWhen:
+        - ${argoCDCapabilityRole.status.ackResourceMetadata.arn != ""}
+
+    - id: ackCapabilityRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.clusterName + "-ack-capability-role"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          name: ${schema.spec.clusterName + "-ack-capability-role"}
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": "capabilities.eks.amazonaws.com" },
+                "Action": ["sts:AssumeRole", "sts:TagSession"]
+              }]
+            }
+          policies:
+            - arn:aws:iam::aws:policy/AdministratorAccess
+          tags:
+            - key: managed-by
+              value: ack
+            - key: cluster
+              value: ${schema.spec.clusterName}
+      readyWhen:
+        - ${ackCapabilityRole.status.ackResourceMetadata.arn != ""}
+
+    # ── Security Group & Launch Template (no dependencies) ──
+
+    - id: securityGroup
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: SecurityGroup
+        metadata:
+          name: ${schema.spec.clusterName + "-hybrid-nodes-sg"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+            services.k8s.aws/deletion-policy: retain
+        spec:
+          name: ${schema.spec.clusterName + "-hybrid-nodes-sg"}
+          description: Allow hybrid node traffic to EKS cluster
+          vpcID: ${schema.spec.vpcId}
+          ingressRules:
+            - ipProtocol: "-1"
+              ipRanges:
+                - cidrIP: ${schema.spec.bareMetalNetworkCIDR}
+                  description: "Allow all traffic from hybrid nodes"
+            - ipProtocol: "-1"
+              ipRanges:
+                - cidrIP: ${schema.spec.hybridPodCIDR}
+                  description: "Allow all traffic from hybrid pods"
+          egressRules:
+            - ipProtocol: "-1"
+              ipRanges:
+                - cidrIP: "0.0.0.0/0"
+                  description: "Allow all outbound"
+          tags:
+            - key: managed-by
+              value: ack
+            - key: cluster
+              value: ${schema.spec.clusterName}
+      readyWhen:
+        - ${securityGroup.status.id != ""}
+
+    - id: launchTemplate
+      template:
+        apiVersion: ec2.services.k8s.aws/v1alpha1
+        kind: LaunchTemplate
+        metadata:
+          name: ${schema.spec.clusterName + "-lt"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+            services.k8s.aws/deletion-policy: retain
+        spec:
+          name: ${schema.spec.clusterName + "-lt"}
+          data:
+            metadataOptions:
+              httpTokens: required
+              httpPutResponseHopLimit: 2
+              httpEndpoint: enabled
+      readyWhen:
+        - ${launchTemplate.status.?id.orValue("") != ""}
+
+    # ── EKS Cluster (depends on clusterRole, securityGroup) ──
+
+    - id: cluster
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: Cluster
+        metadata:
+          name: ${schema.spec.clusterName}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          name: ${schema.spec.clusterName}
+          version: "1.35"
+          roleARN: ${clusterRole.status.ackResourceMetadata.arn}
+          resourcesVPCConfig:
+            endpointPrivateAccess: true
+            endpointPublicAccess: true
+            securityGroupIDs:
+              - ${securityGroup.status.id}
+            subnetIDs: ${schema.spec.subnets}
+          accessConfig:
+            authenticationMode: API
+          remoteNetworkConfig:
+            remoteNodeNetworks:
+              - cidrs:
+                  - ${schema.spec.bareMetalNetworkCIDR}
+            remotePodNetworks:
+              - cidrs:
+                  - ${schema.spec.hybridPodCIDR}
+          tags:
+            managed-by: ack
+          logging:
+            clusterLogging:
+              - enabled: true
+                types:
+                  - api
+                  - audit
+                  - authenticator
+                  - controllerManager
+                  - scheduler
+      readyWhen:
+        - ${cluster.status.status == "ACTIVE"}
+
+    # ── AMP Workspace (no dependencies) ──
+
+    - id: ampWorkspace
+      template:
+        apiVersion: prometheusservice.services.k8s.aws/v1alpha1
+        kind: Workspace
+        metadata:
+          name: ${schema.spec.clusterName}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          alias: ${schema.spec.clusterName}
+          tags:
+            managed-by: ack
+            cluster: ${schema.spec.clusterName}
+      readyWhen:
+        - ${ampWorkspace.status.?workspaceID.orValue("") != ""}
+
+    # ── Addons (depend on cluster) ──
+
+    - id: vpcCniAddon
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: Addon
+        metadata:
+          name: ${schema.spec.clusterName + "-vpc-cni"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          name: vpc-cni
+          clusterName: ${cluster.spec.name}
+          configurationValues: '{}'
+      readyWhen:
+        - ${vpcCniAddon.status.status == "ACTIVE"}
+
+    - id: podIdentityAddon
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: Addon
+        metadata:
+          name: ${schema.spec.clusterName + "-pod-identity-agent"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          name: eks-pod-identity-agent
+          clusterName: ${cluster.spec.name}
+      readyWhen:
+        - ${podIdentityAddon.status.status == "ACTIVE"}
+
+    - id: ebsCsiAddon
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: Addon
+        metadata:
+          name: ${schema.spec.clusterName + "-ebs-csi-driver"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          name: aws-ebs-csi-driver
+          clusterName: ${cluster.spec.name}
+          podIdentityAssociations:
+            - roleARN: ${ebsCsiRole.status.ackResourceMetadata.arn}
+              serviceAccount: ebs-csi-controller-sa
+      readyWhen:
+        - ${ebsCsiAddon.status.status == "ACTIVE"}
+
+    # ── Nodegroup (depends on cluster, nodegroupRole, launchTemplate) ──
+
+    - id: nodegroup
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: Nodegroup
+        metadata:
+          name: ${schema.spec.clusterName + "-nodes"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          name: ${schema.spec.clusterName + "-nodes"}
+          clusterName: ${cluster.spec.name}
+          nodeRole: ${nodegroupRole.status.ackResourceMetadata.arn}
+          launchTemplate:
+            name: ${launchTemplate.spec.name}
+          subnets: ${schema.spec.subnets}
+          instanceTypes: ${schema.spec.nodegroup.instanceTypes}
+          scalingConfig:
+            minSize: ${schema.spec.nodegroup.minSize}
+            maxSize: ${schema.spec.nodegroup.maxSize}
+            desiredSize: ${schema.spec.nodegroup.desiredSize}
+          labels:
+            role: workload
+          tags:
+            managed-by: ack
+      readyWhen:
+        - ${nodegroup.status.status == "ACTIVE"}
+
+    # ── Capabilities (depend on cluster) ──
+
+    - id: argoCDCapability
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: Capability
+        metadata:
+          name: ${schema.spec.clusterName + "-argocd"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          clusterName: ${cluster.spec.name}
+          name: ${schema.spec.clusterName + "-argocd"}
+          type: ARGOCD
+          roleARN: ${argoCDCapabilityRole.status.ackResourceMetadata.arn}
+          deletePropagationPolicy: RETAIN
+          configuration:
+            argoCD:
+              namespace: argocd
+              awsIDC:
+                idcInstanceARN: ${schema.spec.idcInstanceARN}
+                idcRegion: ${schema.spec.idcRegion}
+              rbacRoleMappings: ${schema.spec.rbacRoleMappings}
+          tags:
+            managed-by: ack
+      readyWhen:
+        - ${argoCDCapability.status.status == "ACTIVE"}
+
+    - id: ackCapability
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: Capability
+        metadata:
+          name: ${schema.spec.clusterName + "-ack"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          clusterName: ${cluster.spec.name}
+          name: ${schema.spec.clusterName + "-ack"}
+          type: ACK
+          roleARN: ${ackCapabilityRole.status.ackResourceMetadata.arn}
+          deletePropagationPolicy: RETAIN
+          configuration: {}
+          tags:
+            managed-by: ack
+      readyWhen:
+        - ${ackCapability.status.status == "ACTIVE"}
+
+    - id: kroCapability
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: Capability
+        metadata:
+          name: ${schema.spec.clusterName + "-kro"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          clusterName: ${cluster.spec.name}
+          name: ${schema.spec.clusterName + "-kro"}
+          type: KRO
+          roleARN: ${ackCapabilityRole.status.ackResourceMetadata.arn}
+          deletePropagationPolicy: RETAIN
+          configuration: {}
+          tags:
+            managed-by: ack
+      readyWhen:
+        - ${kroCapability.status.status == "ACTIVE"}
+
+    # ── Access Entries ──
+
+    # Pre-create the ArgoCD capability role's AccessEntry with
+    # AmazonEKSClusterAdminPolicy BEFORE the capability activates.
+    # When the ArgoCD capability later activates, it finds this entry
+    # and adds its own policies (AmazonEKSArgoCDClusterPolicy, etc.)
+    # alongside ours, rather than creating a new entry.
+    # This depends on cluster + argoCDCapabilityRole only (NOT argoCDCapability).
+    - id: workloadArgoCDAccess
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: AccessEntry
+        metadata:
+          name: ${schema.spec.clusterName + "-workload-argocd-access"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          clusterName: ${cluster.spec.name}
+          principalARN: ${argoCDCapabilityRole.status.ackResourceMetadata.arn}
+          type: STANDARD
+          accessPolicies:
+            - policyARN: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+              accessScope:
+                type: cluster
+      readyWhen:
+        - ${workloadArgoCDAccess.status.ackResourceMetadata.arn != ""}
+
+    # Remaining access entries depend on capabilities being ACTIVE
+    - id: mgmtArgoCDAccess
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: AccessEntry
+        metadata:
+          name: ${schema.spec.clusterName + "-mgmt-argocd-access"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          clusterName: ${argoCDCapability.spec.clusterName}
+          principalARN: ${schema.spec.mgmtArgoCDRoleARN}
+          type: STANDARD
+          accessPolicies:
+            - policyARN: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+              accessScope:
+                type: cluster
+      readyWhen:
+        - ${mgmtArgoCDAccess.status.ackResourceMetadata.arn != ""}
+
+    - id: hybridNodesAccess
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: AccessEntry
+        metadata:
+          name: ${schema.spec.clusterName + "-hybrid-nodes-access"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          clusterName: ${argoCDCapability.spec.clusterName}
+          principalARN: ${hybridNodesRole.status.ackResourceMetadata.arn}
+          type: HYBRID_LINUX
+
+    # ── Pod Identity Associations (depend on capabilities being ACTIVE) ──
+
+    - id: ssmPodIdentity
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: PodIdentityAssociation
+        metadata:
+          name: ${schema.spec.clusterName + "-ssm-activation"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          clusterName: ${argoCDCapability.spec.clusterName}
+          namespace: tinkerbell
+          serviceAccount: ssm-activation-creator
+          roleARN: ${ssmJobRole.status.ackResourceMetadata.arn}
+
+    - id: lbcPodIdentity
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: PodIdentityAssociation
+        metadata:
+          name: ${schema.spec.clusterName + "-aws-lbc"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          clusterName: ${argoCDCapability.spec.clusterName}
+          namespace: kube-system
+          serviceAccount: aws-load-balancer-controller
+          roleARN: ${lbcRole.status.ackResourceMetadata.arn}
+
+    - id: imageServerRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.clusterName + "-image-server-role"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          name: ${schema.spec.clusterName + "-image-server-role"}
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": "pods.eks.amazonaws.com" },
+                "Action": ["sts:AssumeRole", "sts:TagSession"]
+              }]
+            }
+          inlinePolicies:
+            ImageBucketReadOnly: ${"{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:GetObject\",\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::" + schema.spec.imageBucket + "\",\"arn:aws:s3:::" + schema.spec.imageBucket + "/*\"]}]}"}
+          tags:
+            - key: managed-by
+              value: ack
+      readyWhen:
+        - ${imageServerRole.status.ackResourceMetadata.arn != ""}
+
+    - id: imageServerPodIdentity
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: PodIdentityAssociation
+        metadata:
+          name: ${schema.spec.clusterName + "-image-server"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          clusterName: ${argoCDCapability.spec.clusterName}
+          namespace: tinkerbell
+          serviceAccount: image-server
+          roleARN: ${imageServerRole.status.ackResourceMetadata.arn}
+
+    - id: adotRole
+      template:
+        apiVersion: iam.services.k8s.aws/v1alpha1
+        kind: Role
+        metadata:
+          name: ${schema.spec.clusterName + "-adot-role"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          name: ${schema.spec.clusterName + "-adot-role"}
+          assumeRolePolicyDocument: |
+            {
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": "pods.eks.amazonaws.com" },
+                "Action": ["sts:AssumeRole", "sts:TagSession"]
+              }]
+            }
+          policies:
+            - arn:aws:iam::aws:policy/AmazonPrometheusRemoteWriteAccess
+          tags:
+            - key: managed-by
+              value: ack
+      readyWhen:
+        - ${adotRole.status.ackResourceMetadata.arn != ""}
+
+    - id: adotPodIdentity
+      template:
+        apiVersion: eks.services.k8s.aws/v1alpha1
+        kind: PodIdentityAssociation
+        metadata:
+          name: ${schema.spec.clusterName + "-adot-collector"}
+          namespace: default
+          annotations:
+            services.k8s.aws/region: ${schema.spec.region}
+            services.k8s.aws/owner-account-id: ${schema.spec.accountId}
+        spec:
+          clusterName: ${argoCDCapability.spec.clusterName}
+          namespace: monitoring
+          serviceAccount: adot-collector
+          roleARN: ${adotRole.status.ackResourceMetadata.arn}
+
+    # ── Cluster Registration & Bootstrap (depend on capabilities) ──
+
+    - id: clusterSecret
+      template:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: ${"cluster-" + schema.spec.clusterName}
+          namespace: argocd
+          labels:
+            argocd.argoproj.io/secret-type: cluster
+            argocd-capability: ${argoCDCapability.spec.name}
+        stringData:
+          name: ${schema.spec.clusterName}
+          server: ${cluster.status.ackResourceMetadata.arn}
+          project: default
+
+    - id: bootstrapApp
+      template:
+        apiVersion: argoproj.io/v1alpha1
+        kind: Application
+        metadata:
+          name: ${schema.spec.clusterName + "-argocd-bootstrap"}
+          namespace: ${clusterSecret.metadata.namespace}
+          labels:
+            argocd-capability: ${argoCDCapability.spec.name}
+            access-entry: ${mgmtArgoCDAccess.metadata.name}
+        spec:
+          project: default
+          source:
+            repoURL: ${schema.spec.git.repoURL}
+            targetRevision: ${schema.spec.git.branch}
+            path: charts/workload-bootstrap
+            helm:
+              parameters:
+                - name: clusterName
+                  value: ${schema.spec.clusterName}
+                - name: clusterARN
+                  value: ${cluster.status.ackResourceMetadata.arn}
+                - name: accountId
+                  value: ${schema.spec.accountId}
+                - name: ampWorkspaceId
+                  value: ${ampWorkspace.status.workspaceID}
+                - name: git.repoURL
+                  value: ${schema.spec.git.repoURL}
+                - name: git.branch
+                  value: ${schema.spec.git.branch}
+          destination:
+            server: ${cluster.status.ackResourceMetadata.arn}
+            namespace: argocd
+          syncPolicy:
+            automated:
+              prune: true
+              selfHeal: true
+            syncOptions:
+              - CreateNamespace=true

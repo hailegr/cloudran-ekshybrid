@@ -1,0 +1,18 @@
+{{- range .Values.servers }}
+{{- if not (.provision | default false) }}
+{{- $mp := index $.Values.machineProfiles .machineProfile }}
+---
+apiVersion: kro.run/v1alpha1
+kind: BareMetalDeprovision
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  name: {{ .name }}
+  mac: {{ .mac | quote }}
+  machineProfile: {{ .machineProfile }}
+  destDisk: {{ $mp.dest_disk }}
+  namespace: {{ $.Release.Namespace }}
+  provisionHash: {{ .provisionHash | default "v1" | quote }}
+{{- end }}
+{{- end }}

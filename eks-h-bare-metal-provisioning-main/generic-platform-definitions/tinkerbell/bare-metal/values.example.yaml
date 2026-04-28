@@ -1,0 +1,43 @@
+# Example bare-metal chart values — copy sections into values.yaml as needed.
+# See image-builder/README.md for the OS image pipeline and USER-GUIDE.md §6 for profiles.
+
+# Machine profiles — one per server model
+# dest_disk: target disk for OS installation
+# efi_partition/root_partition: partition paths after partitioning
+machineProfiles:
+  poweredge-xr8000r-2disk:
+    dest_disk: /dev/nvme0n1
+    efi_partition: /dev/nvme0n1p1
+    root_partition: /dev/nvme0n1p2
+  # hp-dl380-sda:
+  #   dest_disk: /dev/sda
+  #   efi_partition: /dev/sda1
+  #   root_partition: /dev/sda2
+
+# OS profiles — one per OS image
+# archive: filename from image-builder output (s3://<bucket>/images/<archive>)
+# archiveChecksum: sha256 checksum from image-builder output (.sha256 file)
+# rootSetup: set password and permitRootLogin per your security policy
+osProfiles:
+  ubuntu-noble:
+    archive: ubuntu24-eks-1.35-amd64.tar.gz
+    archiveType: targz
+    archiveChecksum: "sha256:abc123def456..."
+    kernelPath: /boot/vmlinuz
+    initrdPath: /boot/initrd.img
+    fsType: ext4
+    rootSetup:
+      password: "<your-root-password>"
+      permitRootLogin: false
+
+# Network profiles — one per bare metal subnet
+# gateway: default gateway for the subnet
+# dns: list of DNS servers reachable from the bare metal network
+networkProfiles:
+  bare-metal-subnet-1:
+    gateway: 192.168.1.1
+    netmask: 255.255.255.0
+    netmaskCIDR: "24"
+    dns:
+      - 192.168.1.1
+      - 8.8.8.8

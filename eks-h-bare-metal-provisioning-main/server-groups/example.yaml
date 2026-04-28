@@ -1,0 +1,24 @@
+# Example server group file — place in server-groups/<cluster>/<group>.yaml
+# This is the source of truth for server definitions.
+
+# Cluster-level settings (must match the workload cluster)
+cluster:
+  name: workload-cluster-1
+  region: us-west-2
+  hybridNodesRole: workload-cluster-1-hybrid-nodes-role
+
+groupName: site-group-1
+
+servers:
+  - name: dell-server-1
+    machineProfile: poweredge-xr8000r-2disk  # drives SR-IOV and telegraf config via platform chart
+    osProfile: ubuntu-noble
+    networkProfile: sjc38-dell-subnet
+    tuningProfile: none  # optional — omit or use a profile from tuningProfiles
+    ip: 192.168.31.151
+    mac: "50:7c:6f:78:2c:38"
+    bmcAddress: 192.168.30.12
+    bmcUser: root
+    bmcPass: <your-bmc-password>
+    provision: false  # set to true after verifying BMC connectivity
+    provisionHash: "v1"  # bump to trigger re-provision via GitOps

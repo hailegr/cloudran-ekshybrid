@@ -1,0 +1,57 @@
+# Platform values — single install per workload cluster
+# SR-IOV device plugin uses a superset resourceList; devices not present on a node are ignored.
+
+# Disable components not needed
+longhorn:
+  preUpgradeChecker:
+    jobEnabled: false
+
+ptpOperator:
+  image:
+    tag: ef16935eb9e194a97de21a92e20d0ea86e658794-eksbuild.4
+
+sriovdp:
+  enabled: true
+  resourceList:
+    - resourceName: sriov_netdevice
+      resourcePrefix: awscse.com
+      selectors:
+        vendors:
+          - "8086"
+        devices:
+          - "1593"
+        drivers:
+          - "ice"
+        rootDevices:
+          - "0000:70:00.0"
+          - "0000:70:00.1"
+          - "0000:70:00.2"
+          - "0000:70:00.3"
+          - "0000:ca:00.0"
+          - "0000:ca:00.1"
+          - "0000:ca:00.2"
+          - "0000:ca:00.3"
+
+telegraf:
+  enabled: true
+  hostNetwork: true
+  ports:
+    - containerPort: 9273
+      hostPort: 9273
+      protocol: TCP
+  override_config: |
+    [agent]
+      interval = "10s"
+      flush_interval = "10s"
+      omit_hostname = false
+    [[outputs.prometheus_client]]
+      listen = ":9273"
+      metric_version = 2
+    [[inputs.cpu]]
+      percpu = true
+      totalcpu = true
+    [[inputs.mem]]
+    [[inputs.disk]]
+      ignore_fs = ["tmpfs", "devtmpfs", "overlay"]
+    [[inputs.net]]
+    [[inputs.ethtool]]

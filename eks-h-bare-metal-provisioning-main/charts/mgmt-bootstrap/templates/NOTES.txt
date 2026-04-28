@@ -1,0 +1,6 @@
+EKS Hybrid Nodes — Bare Metal deployed.
+
+Bootstrap:
+  kubectl apply -f <(helm template {{ .Values.mgmtCluster.name }} charts/mgmt-bootstrap/ -f values.yaml)
+
+Then ArgoCD takes over.

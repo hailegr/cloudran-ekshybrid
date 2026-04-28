@@ -1,0 +1,61 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: tink-selfsigned-issuer
+  namespace: tinkerbell
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: tink-ca
+  namespace: tinkerbell
+spec:
+  isCA: true
+  commonName: tink-ca
+  secretName: tink-ca-secret
+  duration: 87600h
+  renewBefore: 720h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: tink-selfsigned-issuer
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: tink-ca-issuer
+  namespace: tinkerbell
+spec:
+  ca:
+    secretName: tink-ca-secret
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: tink-server-cert
+  namespace: tinkerbell
+spec:
+  secretName: tink-server-tls
+  duration: 8760h
+  renewBefore: 720h
+  commonName: tink-server
+  dnsNames:
+    - tink-server
+    - tink-server.tinkerbell
+    - tink-server.tinkerbell.svc
+    - tink-server.tinkerbell.svc.cluster.local
+    - tink-stack
+    - tink-stack.tinkerbell.svc.cluster.local
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: tink-ca-issuer
+    kind: Issuer
+  usages:
+    - server auth
+    - client auth

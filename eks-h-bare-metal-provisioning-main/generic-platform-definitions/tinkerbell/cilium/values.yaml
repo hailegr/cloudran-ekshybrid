@@ -1,0 +1,39 @@
+# Cilium CNI values for EKS Hybrid Nodes.
+# Only runs on hybrid nodes (nodeAffinity), not EC2 managed nodes.
+# Uses cluster-pool IPAM with pod CIDR (must match EKS remotePodNetworks).
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: eks.amazonaws.com/compute-type
+              operator: In
+              values:
+                - hybrid
+
+ipam:
+  mode: cluster-pool
+  operator:
+    clusterPoolIPv4MaskSize: 26
+    clusterPoolIPv4PodCIDRList: []    # Overridden by ArgoCD from hybridPodCIDR in values.yaml
+
+loadBalancer:
+  serviceTopology: true
+
+operator:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: eks.amazonaws.com/compute-type
+                operator: In
+                values:
+                  - hybrid
+  unmanagedPodWatcher:
+    restart: false
+
+envoy:
+  enabled: false
+
+kubeProxyReplacement: "false"

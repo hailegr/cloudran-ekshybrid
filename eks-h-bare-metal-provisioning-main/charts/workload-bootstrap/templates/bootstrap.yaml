@@ -1,0 +1,57 @@
+# Grant kro cluster-admin on the workload cluster
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kro-cluster-admin
+subjects:
+  - kind: User
+    name: arn:aws:sts::{{ .Values.accountId }}:assumed-role/{{ .Values.clusterName }}-ack-capability-role/KRO
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+# Register the workload cluster in its own ArgoCD (local)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: local-cluster
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: cluster
+stringData:
+  name: in-cluster
+  server: {{ .Values.clusterARN }}
+  project: default
+---
+# Root app for the workload cluster's own ArgoCD — deploys all apps
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ .Values.clusterName }}-workload-apps
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    - repoURL: {{ .Values.git.repoURL }}
+      targetRevision: {{ .Values.git.branch }}
+      path: charts/workload-apps
+      helm:
+        valueFiles:
+          - $values/values.yaml
+        parameters:
+          - name: clusterName
+            value: {{ .Values.clusterName }}
+          - name: ampWorkspaceId
+            value: {{ .Values.ampWorkspaceId | default "" }}
+    - repoURL: {{ .Values.git.repoURL }}
+      targetRevision: {{ .Values.git.branch }}
+      ref: values
+  destination:
+    server: {{ .Values.clusterARN }}
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

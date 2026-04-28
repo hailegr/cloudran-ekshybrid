@@ -1,0 +1,4 @@
+apiVersion: v2
+name: mgmt-bootstrap
+description: Bootstrap the management cluster ArgoCD — one-time apply
+version: 0.1.0

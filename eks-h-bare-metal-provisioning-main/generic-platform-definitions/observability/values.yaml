@@ -1,0 +1,5 @@
+# Observability chart values — populated by ArgoCD from cluster settings
+grafanaEndpoint: ""
+clusterName: ""
+ampWorkspaceId: ""
+ampRegion: ""                       # Set from cluster's AWS region by ArgoCD

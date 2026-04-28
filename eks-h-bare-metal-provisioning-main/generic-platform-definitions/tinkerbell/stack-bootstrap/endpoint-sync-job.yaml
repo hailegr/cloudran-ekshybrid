@@ -1,0 +1,91 @@
+# Resolves tinkerbell and image-server NLB IPs after the stack is deployed.
+# Patches the tinkerbell deployment env vars and writes the tinkerbell-endpoints
+# ConfigMap used by kro's BareMetalProvision/Deprovision externalRef.
+# Runs as a PostSync hook (wave -4) — NLB Services exist from wave -5.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tinkerbell-endpoint-sync
+  namespace: tinkerbell
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  template:
+    spec:
+      serviceAccountName: tinkerbell-endpoint-sync
+      restartPolicy: OnFailure
+      nodeSelector:
+        role: workload
+      containers:
+        - name: sync
+          image: public.ecr.aws/bitnami/kubectl:1.35.4
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -eo pipefail
+
+              resolve_svc() {
+                local svc=$1 attempts=30
+                for i in $(seq 1 $attempts); do
+                  HOST=$(kubectl get svc "$svc" -n tinkerbell -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+                  if [ -n "$HOST" ]; then
+                    IP=$(getent hosts "$HOST" | awk '{print $1; exit}')
+                    if [ -n "$IP" ]; then echo "$IP"; return 0; fi
+                  fi
+                  echo "Waiting for $svc LB... ($i/$attempts)" >&2
+                  sleep 10
+                done
+                return 1
+              }
+
+              # Resolve all IPs for an NLB (multi-AZ returns multiple IPs)
+              resolve_all_ips() {
+                local svc=$1
+                HOST=$(kubectl get svc "$svc" -n tinkerbell -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+                getent hosts "$HOST" | awk '{print $1}'
+              }
+
+              TINK_IP=$(resolve_svc tinkerbell)
+              IMG_IP=$(resolve_svc image-server)
+              REG_IP=$(resolve_svc action-registry)
+              echo "Tinkerbell: $TINK_IP, Image server: $IMG_IP, Registry: $REG_IP"
+
+              # Collect all action-registry NLB IPs for insecure_registries
+              # NLBs have one IP per AZ — Docker needs all of them whitelisted
+              REG_ALL_IPS=$(resolve_all_ips action-registry)
+              INSECURE_LIST=$(echo "$REG_ALL_IPS" | sed 's/$/:5000/' | tr '\n' ',' | sed 's/,$//')
+              echo "Registry IPs (all AZs): $REG_ALL_IPS"
+              echo "insecure_registries: $INSECURE_LIST"
+
+              # Write endpoints ConfigMap (used by kro BareMetalProvision/Deprovision)
+              kubectl create configmap tinkerbell-endpoints \
+                --namespace tinkerbell \
+                --from-literal=tinkerbellIP="$TINK_IP" \
+                --from-literal=imageServerIP="$IMG_IP" \
+                --from-literal=registryIP="$REG_IP" \
+                --dry-run=client -o yaml | kubectl apply -f -
+
+              # Patch tinkerbell deployment with NLB IPs and registry
+              # docker_registry is passed via extra kernel args to HookOS/tink-agent
+              # insecure_registries must include ALL NLB IPs (one per AZ) so Docker
+              # uses HTTP regardless of which AZ IP the request routes to
+              CURRENT=$(kubectl get deploy tinkerbell -n tinkerbell \
+                -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="TINKERBELL_PUBLIC_IPV4")].value}' 2>/dev/null)
+              CURRENT_ARGS=$(kubectl get deploy tinkerbell -n tinkerbell \
+                -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="TINKERBELL_IPXE_HTTP_SCRIPT_EXTRA_KERNEL_ARGS")].value}' 2>/dev/null)
+              DESIRED_ARGS="tink_worker_image=${REG_IP}:5000/tink-agent:v0.22.1 docker_registry=${REG_IP}:5000 insecure_registries=${INSECURE_LIST}"
+              if [ "$CURRENT" = "$TINK_IP" ] && [ "$CURRENT_ARGS" = "$DESIRED_ARGS" ]; then
+                echo "Deployment already up to date"
+              else
+                echo "Updating tinkerbell deployment"
+                kubectl set env deploy/tinkerbell -n tinkerbell \
+                  TINKERBELL_PUBLIC_IPV4="$TINK_IP" \
+                  TINKERBELL_IPXE_SCRIPT_TINK_SERVER_ADDR_PORT="${TINK_IP}:42113" \
+                  TINKERBELL_IPXE_HTTP_SCRIPT_EXTRA_KERNEL_ARGS="$DESIRED_ARGS"
+              fi
+
+              echo "All endpoints synced"

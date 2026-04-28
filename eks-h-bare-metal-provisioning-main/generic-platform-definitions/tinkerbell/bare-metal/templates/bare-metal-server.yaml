@@ -1,0 +1,70 @@
+{{- range .Values.servers }}
+{{- $mp := index $.Values.machineProfiles .machineProfile }}
+{{- $os := index $.Values.osProfiles .osProfile }}
+{{- $network := index $.Values.networkProfiles .networkProfile }}
+{{- $tuning := dict }}
+{{- if .tuningProfile }}
+{{- $tuning = index $.Values.tuningProfiles .tuningProfile }}
+{{- end }}
+---
+# Inventory — always present (server identity)
+apiVersion: kro.run/v1alpha1
+kind: BareMetalInventory
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  name: {{ .name }}
+  mac: {{ .mac | quote }}
+  ip: {{ .ip }}
+  bmcAddress: {{ .bmcAddress }}
+  bmcUser: {{ .bmcUser }}
+  bmcPass: {{ .bmcPass }}
+  machineProfile: {{ .machineProfile }}
+  osProfile: {{ .osProfile }}
+  destDisk: {{ $mp.dest_disk }}
+  efiPartition: {{ $mp.efi_partition }}
+  rootPartition: {{ $mp.root_partition }}
+  osFsType: {{ $os.fsType }}
+  gateway: {{ $network.gateway }}
+  netmask: {{ $network.netmask }}
+  dnsServers: "{{ join "," $network.dns }}"
+  serverGroup: {{ $.Release.Name }}
+  namespace: {{ $.Release.Namespace }}
+{{- if .provision | default false }}
+---
+# Provision — only when provision=true (ArgoCD prunes when removed)
+apiVersion: kro.run/v1alpha1
+kind: BareMetalProvision
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  name: {{ .name }}
+  mac: {{ .mac | quote }}
+  ip: {{ .ip }}
+  machineProfile: {{ .machineProfile }}
+  osProfile: {{ .osProfile }}
+  destDisk: {{ $mp.dest_disk }}
+  efiPartition: {{ $mp.efi_partition }}
+  rootPartition: {{ $mp.root_partition }}
+  kernelPath: {{ $os.kernelPath }}
+  initrdPath: {{ $os.initrdPath }}
+  osArchive: {{ required (printf "osProfiles.%s.archive is required — run image-builder first (see image-builder/README.md)" .osProfile) $os.archive }}
+  osArchiveType: {{ $os.archiveType }}
+  osArchiveChecksum: {{ $os.archiveChecksum | default "" | quote }}
+  osFsType: {{ $os.fsType }}
+  gateway: {{ $network.gateway }}
+  netmaskCIDR: "{{ $network.netmaskCIDR }}"
+  dnsServers: "{{ join "," $network.dns }}"
+  serverGroup: {{ $.Release.Name }}
+  namespace: {{ $.Release.Namespace }}
+  provisionHash: {{ .provisionHash | default "v1" | quote }}
+  clusterName: {{ $.Values.cluster.name }}
+  clusterRegion: {{ $.Values.cluster.region }}
+  hybridNodesRole: {{ $.Values.cluster.hybridNodesRole }}
+  tuningKernelCmdline: {{ $tuning.kernelCmdline | default "" | quote }}
+  tuningSysctl: "{{- range $i, $k := ($tuning.sysctl | default dict) | keys | sortAlpha }}{{ if $i }};{{ end }}{{ $k }}={{ index $tuning.sysctl $k }}{{- end }}"
+  tuningDisabledServices: {{ $tuning.disabledServices | default list | join "," | quote }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,38 @@
+# Container images to mirror to ECR for air-gapped bare metal provisioning.
+# Each entry creates an ECR repository and is copied by the mirror CodeBuild job.
+# arch: optional, defaults to amd64. Set to "all" to copy all platforms.
+
+images:
+  # tink-agent — workflow orchestrator pulled by HookOS at boot
+  tink-agent:
+    source: ghcr.io/tinkerbell/tink-agent
+    tags: ["v0.22.1"]
+    arch: amd64
+
+  # Tinkerbell workflow actions (pulled by HookOS via action-registry)
+  tinkerbell-actions/writefile:
+    source: quay.io/tinkerbell-actions/writefile
+    tags: ["v1.0.0"]
+    arch: amd64
+  tinkerbell-actions/cexec:
+    source: quay.io/tinkerbell-actions/cexec
+    tags: ["v1.0.0"]
+    arch: amd64
+  tinkerbell-actions/kexec:
+    source: quay.io/tinkerbell-actions/kexec
+    tags: ["v1.0.0"]
+    arch: amd64
+
+  # Disk tools — alpine with partition/format utilities pre-installed
+  # Used by partition-and-format, extract-os-archive, and wipe-disks actions
+  disk-tools:
+    source: alpine
+    tags: ["3.20"]
+    arch: amd64
+    packages:
+      - sgdisk        # GPT partition table management (create EFI + root partitions)
+      - wipefs        # wipe filesystem signatures before partitioning
+      - dosfstools    # mkfs.vfat for EFI partition
+      - e2fsprogs     # mkfs.ext4 for root partition
+      - util-linux    # partprobe, blkdiscard
+      - efibootmgr    # manage UEFI boot entries (cleanup during wipe)

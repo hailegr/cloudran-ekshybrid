@@ -1,0 +1,13 @@
+{{- range $name := list "workload-cluster-overview" "bare-metal-node-metrics" "tinkerbell-stack" "eks-cluster-status" "node-distribution" "infrastructure-dashboard" "provisioning-dashboard" }}
+---
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: {{ $name }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: amg
+  json: |
+    {{ $.Files.Get (printf "dashboards/%s.json" $name) | nindent 4 }}
+{{- end }}

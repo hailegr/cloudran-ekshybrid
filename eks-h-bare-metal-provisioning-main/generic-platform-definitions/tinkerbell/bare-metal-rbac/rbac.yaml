@@ -1,0 +1,77 @@
+# RBAC for SSM activation and cleanup Jobs.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ssm-activation-creator
+  namespace: tinkerbell
+---
+# RBAC for node deprovisioning (drain + delete).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: node-deprovisioner
+  namespace: tinkerbell
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: node-deprovisioner
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "patch", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: node-deprovisioner
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: node-deprovisioner
+subjects:
+  - kind: ServiceAccount
+    name: node-deprovisioner
+    namespace: tinkerbell
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ssm-activation-creator
+  namespace: tinkerbell
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "update", "patch", "get", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "update", "patch", "get"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+  - apiGroups: ["tinkerbell.org"]
+    resources: ["workflows", "hardware"]
+    verbs: ["get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ssm-activation-creator
+  namespace: tinkerbell
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ssm-activation-creator
+subjects:
+  - kind: ServiceAccount
+    name: ssm-activation-creator
+    namespace: tinkerbell
